@@ -7,7 +7,6 @@
 //! windows; the caller maps to/from the real windows and snaps `current`
 //! to `finish`.
 
-use crate::layout::common;
 use crate::types::{CenterFocused, Config, Rectangle, WindowGeom};
 
 pub fn apply(
@@ -152,10 +151,6 @@ pub fn apply(
     if !should_center {
         snap_to_edge(windows, non_exclusive, config.horizontal_gap);
     }
-
-    for window in windows.iter_mut() {
-        common::skip_if_at_rest(window);
-    }
 }
 
 fn focused_window_layout(
@@ -257,6 +252,7 @@ fn snap_to_edge(windows: &mut [WindowGeom], non_exclusive: Rectangle, gap: i32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::common;
     use crate::types::WindowGeom;
 
     const OUTPUT: Rectangle = Rectangle {
@@ -281,7 +277,6 @@ mod tests {
         for w in windows.iter_mut() {
             if let Some(finish) = w.finish {
                 w.current = finish;
-                w.sent_current = Some(finish);
                 w.finish = None;
             }
         }
