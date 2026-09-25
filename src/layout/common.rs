@@ -46,26 +46,13 @@ pub fn center_rectangle(non_exclusive: Rectangle, config: &Config) -> Rectangle 
 /// DIRECTIONAL_MOVE_PX; niri also hardcodes it rather than exposing config).
 pub const FLOATING_MOVE_STEP: i32 = 50;
 
-/// Clear `finish` when the compositor already has the corresponding geometry.
-pub fn skip_if_at_rest(
-    window: &mut WindowGeom,
-    output_rect: Rectangle,
-    overflows_other_output: bool,
-    border_width: i32,
-) {
-    let Some(finish) = window.finish else {
-        return;
-    };
-    if !finish.eql(window.current) {
-        return;
-    }
-
-    let content = content_rect(finish, border_width);
-    let visible = overlaps_output(finish, output_rect) && !overflows_other_output;
-    let clip = compute_clip_box(finish, output_rect, border_width as u8);
-    if window.sent_current == Some(content)
-        && window.sent_visible == Some(visible)
-        && window.sent_clip == Some(clip)
+/// Clear `finish` when the window is already at rest at it.
+pub fn skip_if_at_rest(window: &mut WindowGeom) {
+    if let Some(finish) = window.finish
+        && finish.eql(window.current)
+        && window
+            .sent_current
+            .is_some_and(|sent| sent.eql(window.current))
     {
         window.finish = None;
     }
@@ -146,59 +133,6 @@ pub fn clamp_floating_into_output(geom: &mut WindowGeom, output_rect: Rectangle)
     geom.floating.y = clamp_i32(geom.floating.y, top, bottom - geom.floating.height);
 }
 
-fn content_rect(window_rect: Rectangle, border_width: i32) -> Rectangle {
-    Rectangle {
-        x: window_rect.x + border_width,
-        y: window_rect.y + border_width,
-        width: (window_rect.width - 2 * border_width).max(0),
-        height: (window_rect.height - 2 * border_width).max(0),
-    }
-}
-
-fn overlaps_output(window_rect: Rectangle, output_rect: Rectangle) -> bool {
-    let window_left = window_rect.x;
-    let window_right = window_rect.x + window_rect.width;
-    let window_top = window_rect.y;
-    let window_bottom = window_rect.y + window_rect.height;
-    let output_left = output_rect.x;
-    let output_right = output_rect.x + output_rect.width;
-    let output_top = output_rect.y;
-    let output_bottom = output_rect.y + output_rect.height;
-
-    !(output_left >= window_right
-        || output_right <= window_left
-        || output_top >= window_bottom
-        || output_bottom <= window_top)
-}
-
-fn intersects(a: Rectangle, b: Rectangle) -> bool {
-    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-}
-
-/// True when a window that is not fully inside `output_rect` extends into a
-/// different physical output. Such overflow is hidden: River's clip box only
-/// affects rendering, while pointer hit testing still uses the full window
-/// dimensions.
-pub fn overflows_other_output(
-    window_rect: Rectangle,
-    output_rect: Rectangle,
-    output_idx: usize,
-    output_rects: &[Rectangle],
-) -> bool {
-    let fits_output = window_rect.x >= output_rect.x
-        && window_rect.y >= output_rect.y
-        && window_rect.x + window_rect.width <= output_rect.x + output_rect.width
-        && window_rect.y + window_rect.height <= output_rect.y + output_rect.height;
-    if fits_output {
-        return false;
-    }
-
-    output_rects
-        .iter()
-        .enumerate()
-        .any(|(idx, rect)| idx != output_idx && intersects(window_rect, *rect))
-}
-
 pub fn compute_clip_box(
     window_rect: Rectangle,
     output_rect: Rectangle,
@@ -242,14 +176,12 @@ pub fn compute_clip_box(
 }
 
 /// Send geometry/show/clip requests for a window, skipping redundant ones.
-/// Ported from rill-ed `placeWindow`, with multi-output overflow hidden and
-/// position changes kept separate from content dimension changes.
+/// Ported from rill-ed `placeWindow` (protocol IO; not unit-tested).
 pub fn place_window(
     river_window: &RiverWindowV1,
     river_node: &RiverNodeV1,
     geom: &mut WindowGeom,
     output_rect: Rectangle,
-    overflows_other_output: bool,
     config: &Config,
 ) {
     let border_width = if geom.is_fullscreen {
@@ -257,25 +189,30 @@ pub fn place_window(
     } else {
         config.border.width as i32
     };
-    let content = content_rect(geom.current, border_width);
 
-    if geom.sent_current != Some(content) {
-        let size_changed = geom
-            .sent_current
-            .is_none_or(|sent| sent.width != content.width || sent.height != content.height);
-        let position_changed = geom
-            .sent_current
-            .is_none_or(|sent| sent.x != content.x || sent.y != content.y);
-        if size_changed {
-            river_window.propose_dimensions(content.width, content.height);
-        }
-        if position_changed {
-            river_node.set_position(content.x, content.y);
-        }
-        geom.sent_current = Some(content);
+    if geom.sent_current.is_none_or(|sent| !sent.eql(geom.current)) {
+        river_window.propose_dimensions(
+            (geom.current.width - 2 * border_width).max(0),
+            (geom.current.height - 2 * border_width).max(0),
+        );
+        river_node.set_position(geom.current.x + border_width, geom.current.y + border_width);
+        geom.sent_current = Some(geom.current);
     }
 
-    let visible = overlaps_output(geom.current, output_rect) && !overflows_other_output;
+    let window_left = geom.current.x;
+    let window_right = geom.current.x + geom.current.width;
+    let window_top = geom.current.y;
+    let window_bottom = geom.current.y + geom.current.height;
+
+    let output_left = output_rect.x;
+    let output_right = output_rect.x + output_rect.width;
+    let output_top = output_rect.y;
+    let output_bottom = output_rect.y + output_rect.height;
+
+    let visible = !(output_left >= window_right
+        || output_right <= window_left
+        || output_top >= window_bottom
+        || output_bottom <= window_top);
     if geom.sent_visible != Some(visible) {
         if visible {
             river_window.show();

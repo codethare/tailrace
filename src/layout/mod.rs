@@ -277,12 +277,6 @@ pub fn snap_to_finish(wm: &mut WindowManager) {
     } else {
         None
     };
-    let clip_output_idx = if wm.overview_state.is_some() {
-        wm.focused_output_idx
-    } else {
-        None
-    };
-    let output_rects: Vec<_> = wm.outputs.iter().map(|o| o.rectangle).collect();
     // The focused fullscreen window is handed to the compositor, which then
     // owns its position and clips content, borders and decorations to the
     // output (river-window-management-v1.fullscreen). Only the focused one:
@@ -303,28 +297,13 @@ pub fn snap_to_finish(wm: &mut WindowManager) {
                     river_node,
                     geom,
                 } = window;
-                let output_rect = clip.unwrap_or(output.rectangle);
-                let output_idx_for_clip = clip_output_idx.unwrap_or(output_idx);
-                let overflows_other_output = common::overflows_other_output(
-                    geom.finish.unwrap_or(geom.current),
-                    output_rect,
-                    output_idx_for_clip,
-                    &output_rects,
-                );
-                let border_width = if geom.is_fullscreen {
-                    0
-                } else {
-                    config.border.width as i32
-                };
-                common::skip_if_at_rest(geom, output_rect, overflows_other_output, border_width);
                 if let Some(finish) = geom.finish {
                     geom.current = finish;
                     common::place_window(
                         river_window,
                         river_node,
                         geom,
-                        output_rect,
-                        overflows_other_output,
+                        clip.unwrap_or(output.rectangle),
                         &config,
                     );
                     if geom.is_fullscreen {
