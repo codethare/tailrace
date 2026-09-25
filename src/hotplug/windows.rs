@@ -6,6 +6,76 @@
 
 use super::*;
 
+#[test]
+fn tiled_window_input_area_stays_within_its_output() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1360, 768));
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "B", (1360, 0), (1920, 1080));
+    s.manage(&mut sv);
+
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::FocusOutputLeft,
+    );
+    s.manage(&mut sv);
+    s.config_mut().default_window_width = 0.75;
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    let right_window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    sv.clear_request_log();
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::FocusWindowLeft,
+    );
+    s.manage(&mut sv);
+
+    let output = s.state.wm.outputs[0].rectangle;
+    let border = s.state.wm.config.border.width as i32;
+    let window = &s.state.wm.outputs[0].workspace_list[0].window_list[1];
+    let logical = window.geom.current;
+    let node = children_with_interface(&sv, "river_node_v1")[1].clone();
+    assert!(
+        logical.x + logical.width > output.x + output.width,
+        "test setup must create a window overhanging A: {logical:?} vs {output:?}"
+    );
+
+    let dimensions = sv
+        .requests_for(&right_window)
+        .into_iter()
+        .rev()
+        .find(|(_, op, _)| *op == 3) // propose_dimensions
+        .map(|(_, _, args)| args)
+        .expect("overhanging window must be resized for the compositor");
+    let dimensions: Vec<i32> = dimensions
+        .split(',')
+        .map(|value| value.trim_start_matches('i').parse().unwrap())
+        .collect();
+    let position = sv
+        .requests_for(&node)
+        .into_iter()
+        .rev()
+        .find(|(_, op, _)| *op == 1) // set_position
+        .map(|(_, _, args)| args)
+        .expect("overhanging window must be repositioned for the compositor");
+    let position: Vec<i32> = position
+        .split(',')
+        .map(|value| value.trim_start_matches('i').parse().unwrap())
+        .collect();
+
+    assert_eq!(position[0], logical.x + border);
+    assert_eq!(position[1], logical.y + border);
+    assert_eq!(
+        position[0] + dimensions[0] + border,
+        output.x + output.width,
+        "content plus borders must not extend into B"
+    );
+}
+
 /// Regression: a fullscreen window fills its output rect exactly, so any
 /// window border (and the -border clip offset) would be drawn 3px beyond the
 /// output onto a neighboring monitor's adjoining edge ("the edge of A facing
