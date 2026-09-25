@@ -41,8 +41,9 @@ cycle, the layout pipeline and the test harness.
 river -c ./target/release/tailrace
 ```
 
-Requires river **0.4.6 or newer** (tailrace binds `river_window_manager_v1` v5 and
-`river_xkb_bindings_v1` v3).
+Requires a River build advertising `river_window_manager_v1` **v6** (currently
+River `main`; the v0.4.8 release only provides v5). tailrace also binds
+`river_xkb_bindings_v1` v3.
 
 tailrace itself takes `-c/--config <path>` to read a specific config file,
 `--help` and `--version`.

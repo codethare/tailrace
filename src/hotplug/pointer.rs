@@ -251,3 +251,64 @@ fn focusing_another_output_warps_the_pointer_to_its_centre() {
         "the warp must not repeat every manage cycle"
     );
 }
+
+#[test]
+fn v6_touch_events_are_ignored() {
+    let (mut s, mut sv) = build();
+    let seat = s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    s.check_consistent();
+
+    let status = s.state.wm.status.clone();
+    s.send(
+        &mut sv,
+        window.clone(),
+        EVT_WIN_TOUCH_MOVE_REQUESTED,
+        vec![Argument::Object(seat.clone()), Argument::Int(1)],
+    );
+    s.send(
+        &mut sv,
+        window,
+        EVT_WIN_TOUCH_RESIZE_REQUESTED,
+        vec![
+            Argument::Object(seat.clone()),
+            Argument::Int(1),
+            Argument::Uint(1),
+        ],
+    );
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA_TOUCH,
+        vec![Argument::Int(1), Argument::Int(20), Argument::Int(10)],
+    );
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_RELEASE_TOUCH,
+        vec![Argument::Int(1)],
+    );
+    s.send(
+        &mut sv,
+        seat,
+        EVT_SEAT_OP_CANCEL_TOUCH,
+        vec![Argument::Int(2)],
+    );
+
+    assert_eq!(
+        s.state.wm.status, status,
+        "touch events must not dirty layout"
+    );
+    assert!(
+        s.state.wm.outputs[0].workspace_list[0].window_list[0]
+            .geom
+            .drag_origin
+            .is_none()
+    );
+    s.manage(&mut sv);
+    s.check_consistent();
+}

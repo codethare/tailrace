@@ -174,6 +174,10 @@ pub fn seat_event(
             }
             false
         }
+        // River v6 touch operations are vendored but not started by tailrace.
+        river_seat_v1::Event::OpDeltaTouch { .. }
+        | river_seat_v1::Event::OpReleaseTouch { .. }
+        | river_seat_v1::Event::OpCancelTouch { .. } => false,
     }
 }
 

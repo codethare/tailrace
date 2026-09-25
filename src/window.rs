@@ -134,6 +134,10 @@ pub fn window_event(
                 // window; not used yet (a recording indicator or a policy for
                 // hidden windows would read it).
                 river_window_v1::Event::CaptureSessions { .. } => {}
+                // River v6 touch move/resize requests are vendored but not
+                // implemented; ignoring them must not dirty the layout.
+                river_window_v1::Event::TouchMoveRequested { .. }
+                | river_window_v1::Event::TouchResizeRequested { .. } => return false,
                 _ => return false,
             }
             layout::update(&mut state.wm);

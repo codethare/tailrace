@@ -90,7 +90,7 @@ impl Dispatch<WlRegistry, ()> for AppData {
         };
         match interface.as_str() {
             "river_window_manager_v1" => {
-                const VERSION: u32 = 5;
+                const VERSION: u32 = 6;
                 if version < VERSION {
                     eprintln!(
                         "tailrace: river_window_manager_v1 v{version}, need at least v{VERSION}"
