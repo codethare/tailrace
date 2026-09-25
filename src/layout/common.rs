@@ -143,35 +143,30 @@ pub fn clamp_floating_into_output(geom: &mut WindowGeom, output_rect: Rectangle)
     geom.floating.y = clamp_i32(geom.floating.y, top, bottom - geom.floating.height);
 }
 
-fn visible_rect(window_rect: Rectangle, output_rect: Rectangle) -> Rectangle {
-    let left = window_rect.x.max(output_rect.x);
-    let top = window_rect.y.max(output_rect.y);
-    let right = (window_rect.x + window_rect.width).min(output_rect.x + output_rect.width);
-    let bottom = (window_rect.y + window_rect.height).min(output_rect.y + output_rect.height);
-
-    Rectangle {
-        x: left,
-        y: top,
-        width: (right - left).max(0),
-        height: (bottom - top).max(0),
-    }
-}
-
+/// Full content geometry, or `None` when any part of the window lies outside
+/// its output. Partially visible windows stay hidden so they cannot receive
+/// input on a neighboring output and their content never needs resizing.
 fn content_rect(
     window_rect: Rectangle,
     output_rect: Rectangle,
     border_width: i32,
 ) -> Option<Rectangle> {
-    let visible = visible_rect(window_rect, output_rect);
-    if visible.width <= 2 * border_width || visible.height <= 2 * border_width {
+    let fits_output = window_rect.x >= output_rect.x
+        && window_rect.y >= output_rect.y
+        && window_rect.x + window_rect.width <= output_rect.x + output_rect.width
+        && window_rect.y + window_rect.height <= output_rect.y + output_rect.height;
+    if !fits_output
+        || window_rect.width <= 2 * border_width
+        || window_rect.height <= 2 * border_width
+    {
         return None;
     }
 
     Some(Rectangle {
-        x: visible.x + border_width,
-        y: visible.y + border_width,
-        width: visible.width - 2 * border_width,
-        height: visible.height - 2 * border_width,
+        x: window_rect.x + border_width,
+        y: window_rect.y + border_width,
+        width: window_rect.width - 2 * border_width,
+        height: window_rect.height - 2 * border_width,
     })
 }
 
@@ -202,7 +197,12 @@ pub fn place_window(
     if let Some(content) = content
         && geom.sent_current != Some(content)
     {
-        river_window.propose_dimensions(content.width, content.height);
+        if geom
+            .sent_current
+            .is_none_or(|sent| sent.width != content.width || sent.height != content.height)
+        {
+            river_window.propose_dimensions(content.width, content.height);
+        }
         river_node.set_position(content.x, content.y);
         geom.sent_current = Some(content);
     }
@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_rect_clips_window_hanging_off_bottom_edge() {
+    fn content_rect_hides_window_hanging_off_bottom_edge() {
         let window = Rectangle {
             x: 100,
             y: 800,
@@ -362,19 +362,11 @@ mod tests {
             height: 400,
         };
 
-        assert_eq!(
-            visible_rect(window, OUTPUT),
-            Rectangle {
-                x: 100,
-                y: 800,
-                width: 800,
-                height: 280,
-            }
-        );
+        assert_eq!(content_rect(window, OUTPUT, 3), None);
     }
 
     #[test]
-    fn visible_rect_clips_window_hanging_off_right_edge() {
+    fn content_rect_hides_window_hanging_off_right_edge() {
         let window = Rectangle {
             x: 1500,
             y: 100,
@@ -382,14 +374,26 @@ mod tests {
             height: 400,
         };
 
+        assert_eq!(content_rect(window, OUTPUT, 3), None);
+    }
+
+    #[test]
+    fn content_rect_keeps_full_size_for_window_inside_output() {
+        let window = Rectangle {
+            x: 100,
+            y: 100,
+            width: 800,
+            height: 600,
+        };
+
         assert_eq!(
-            visible_rect(window, OUTPUT),
-            Rectangle {
-                x: 1500,
-                y: 100,
-                width: 420,
-                height: 400,
-            }
+            content_rect(window, OUTPUT, 3),
+            Some(Rectangle {
+                x: 103,
+                y: 103,
+                width: 794,
+                height: 594,
+            })
         );
     }
 

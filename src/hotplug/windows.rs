@@ -7,7 +7,7 @@
 use super::*;
 
 #[test]
-fn tiled_window_input_area_stays_within_its_output() {
+fn focus_changes_hide_and_show_edge_window_without_resizing() {
     let (mut s, mut sv) = build();
     s.add_seat(&mut sv);
     s.manage(&mut sv);
@@ -22,7 +22,7 @@ fn tiled_window_input_area_stays_within_its_output() {
     );
     s.manage(&mut sv);
     s.config_mut().default_window_width = 0.75;
-    s.add_window(&mut sv);
+    let left_window = s.add_window(&mut sv);
     s.manage(&mut sv);
     let right_window = s.add_window(&mut sv);
     s.manage(&mut sv);
@@ -35,44 +35,45 @@ fn tiled_window_input_area_stays_within_its_output() {
     s.manage(&mut sv);
 
     let output = s.state.wm.outputs[0].rectangle;
-    let border = s.state.wm.config.border.width as i32;
-    let window = &s.state.wm.outputs[0].workspace_list[0].window_list[1];
-    let logical = window.geom.current;
-    let node = children_with_interface(&sv, "river_node_v1")[1].clone();
+    let edge = s.state.wm.outputs[0].workspace_list[0].window_list[1]
+        .geom
+        .current;
     assert!(
-        logical.x + logical.width > output.x + output.width,
-        "test setup must create a window overhanging A: {logical:?} vs {output:?}"
+        edge.x + edge.width > output.x + output.width,
+        "test setup must create a window overhanging A: {edge:?} vs {output:?}"
+    );
+    assert_eq!(
+        count_requests(&sv, &right_window, 4),
+        1,
+        "edge window must hide"
+    );
+    assert_eq!(
+        count_requests(&sv, &right_window, 3),
+        0,
+        "hiding an edge window must not resize client content"
+    );
+    assert_eq!(
+        count_requests(&sv, &left_window, 3),
+        0,
+        "moving focus must not resize the other visible window"
     );
 
-    let dimensions = sv
-        .requests_for(&right_window)
-        .into_iter()
-        .rev()
-        .find(|(_, op, _)| *op == 3) // propose_dimensions
-        .map(|(_, _, args)| args)
-        .expect("overhanging window must be resized for the compositor");
-    let dimensions: Vec<i32> = dimensions
-        .split(',')
-        .map(|value| value.trim_start_matches('i').parse().unwrap())
-        .collect();
-    let position = sv
-        .requests_for(&node)
-        .into_iter()
-        .rev()
-        .find(|(_, op, _)| *op == 1) // set_position
-        .map(|(_, _, args)| args)
-        .expect("overhanging window must be repositioned for the compositor");
-    let position: Vec<i32> = position
-        .split(',')
-        .map(|value| value.trim_start_matches('i').parse().unwrap())
-        .collect();
+    sv.clear_request_log();
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::FocusWindowRight,
+    );
+    s.manage(&mut sv);
 
-    assert_eq!(position[0], logical.x + border);
-    assert_eq!(position[1], logical.y + border);
     assert_eq!(
-        position[0] + dimensions[0] + border,
-        output.x + output.width,
-        "content plus borders must not extend into B"
+        count_requests(&sv, &right_window, 5),
+        1,
+        "edge window must show"
+    );
+    assert_eq!(
+        count_requests(&sv, &right_window, 3),
+        0,
+        "showing a focused edge window must keep its content dimensions"
     );
 }
 
