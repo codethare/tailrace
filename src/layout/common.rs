@@ -46,24 +46,14 @@ pub fn center_rectangle(non_exclusive: Rectangle, config: &Config) -> Rectangle 
 /// DIRECTIONAL_MOVE_PX; niri also hardcodes it rather than exposing config).
 pub const FLOATING_MOVE_STEP: i32 = 50;
 
-/// Clear `finish` when the compositor already has the corresponding geometry.
-pub fn skip_if_at_rest(window: &mut WindowGeom, output_rect: Rectangle, border_width: i32) {
-    let Some(finish) = window.finish else {
-        return;
-    };
-    if !finish.eql(window.current) {
-        return;
-    }
-
-    let at_rest = match content_rect(finish, output_rect, border_width) {
-        Some(content) => {
-            window.sent_current == Some(content)
-                && window.sent_visible == Some(true)
-                && window.sent_clip == Some(clip_box(content, border_width))
-        }
-        None => window.sent_visible == Some(false),
-    };
-    if at_rest {
+/// Clear `finish` when the window is already at rest at it.
+pub fn skip_if_at_rest(window: &mut WindowGeom) {
+    if let Some(finish) = window.finish
+        && finish.eql(window.current)
+        && window
+            .sent_current
+            .is_some_and(|sent| sent.eql(window.current))
+    {
         window.finish = None;
     }
 }
@@ -143,43 +133,50 @@ pub fn clamp_floating_into_output(geom: &mut WindowGeom, output_rect: Rectangle)
     geom.floating.y = clamp_i32(geom.floating.y, top, bottom - geom.floating.height);
 }
 
-/// Full content geometry, or `None` when any part of the window lies outside
-/// its output. Partially visible windows stay hidden so they cannot receive
-/// input on a neighboring output and their content never needs resizing.
-fn content_rect(
+pub fn compute_clip_box(
     window_rect: Rectangle,
     output_rect: Rectangle,
-    border_width: i32,
-) -> Option<Rectangle> {
-    let fits_output = window_rect.x >= output_rect.x
-        && window_rect.y >= output_rect.y
-        && window_rect.x + window_rect.width <= output_rect.x + output_rect.width
-        && window_rect.y + window_rect.height <= output_rect.y + output_rect.height;
-    if !fits_output
-        || window_rect.width <= 2 * border_width
-        || window_rect.height <= 2 * border_width
-    {
-        return None;
+    border_width: u8,
+) -> Rectangle {
+    let window_left = window_rect.x;
+    let window_right = window_rect.x + window_rect.width;
+    let window_top = window_rect.y;
+    let window_bottom = window_rect.y + window_rect.height;
+
+    let output_left = output_rect.x;
+    let output_right = output_rect.x + output_rect.width;
+    let output_top = output_rect.y;
+    let output_bottom = output_rect.y + output_rect.height;
+
+    let mut clip_width = window_rect.width;
+    let mut clip_height = window_rect.height;
+    let mut clip_x = 0;
+    let mut clip_y = 0;
+
+    if output_left < window_right && output_left > window_left {
+        clip_x = output_left - window_left;
+        clip_width = (window_right - output_left).min(output_rect.width);
+    } else if output_right > window_left && output_right < window_right {
+        clip_width = output_right - window_left;
     }
 
-    Some(Rectangle {
-        x: window_rect.x + border_width,
-        y: window_rect.y + border_width,
-        width: window_rect.width - 2 * border_width,
-        height: window_rect.height - 2 * border_width,
-    })
-}
+    if output_top < window_bottom && output_top > window_top {
+        clip_y = output_top - window_top;
+        clip_height = (window_bottom - output_top).min(output_rect.height);
+    } else if output_bottom > window_top && output_bottom < window_bottom {
+        clip_height = output_bottom - window_top;
+    }
 
-fn clip_box(content: Rectangle, border_width: i32) -> Rectangle {
     Rectangle {
-        x: -border_width,
-        y: -border_width,
-        width: content.width + 2 * border_width,
-        height: content.height + 2 * border_width,
+        x: clip_x - border_width as i32,
+        y: clip_y - border_width as i32,
+        width: clip_width,
+        height: clip_height,
     }
 }
 
 /// Send geometry/show/clip requests for a window, skipping redundant ones.
+/// Ported from rill-ed `placeWindow` (protocol IO; not unit-tested).
 pub fn place_window(
     river_window: &RiverWindowV1,
     river_node: &RiverNodeV1,
@@ -192,22 +189,30 @@ pub fn place_window(
     } else {
         config.border.width as i32
     };
-    let content = content_rect(geom.current, output_rect, border_width);
 
-    if let Some(content) = content
-        && geom.sent_current != Some(content)
-    {
-        if geom
-            .sent_current
-            .is_none_or(|sent| sent.width != content.width || sent.height != content.height)
-        {
-            river_window.propose_dimensions(content.width, content.height);
-        }
-        river_node.set_position(content.x, content.y);
-        geom.sent_current = Some(content);
+    if geom.sent_current.is_none_or(|sent| !sent.eql(geom.current)) {
+        river_window.propose_dimensions(
+            (geom.current.width - 2 * border_width).max(0),
+            (geom.current.height - 2 * border_width).max(0),
+        );
+        river_node.set_position(geom.current.x + border_width, geom.current.y + border_width);
+        geom.sent_current = Some(geom.current);
     }
 
-    let visible = content.is_some();
+    let window_left = geom.current.x;
+    let window_right = geom.current.x + geom.current.width;
+    let window_top = geom.current.y;
+    let window_bottom = geom.current.y + geom.current.height;
+
+    let output_left = output_rect.x;
+    let output_right = output_rect.x + output_rect.width;
+    let output_top = output_rect.y;
+    let output_bottom = output_rect.y + output_rect.height;
+
+    let visible = !(output_left >= window_right
+        || output_right <= window_left
+        || output_top >= window_bottom
+        || output_bottom <= window_top);
     if geom.sent_visible != Some(visible) {
         if visible {
             river_window.show();
@@ -217,12 +222,10 @@ pub fn place_window(
         geom.sent_visible = Some(visible);
     }
 
-    if let Some(content) = content {
-        let clip = clip_box(content, border_width);
-        if geom.sent_clip.is_none_or(|sent| !sent.eql(clip)) {
-            river_window.set_clip_box(clip.x, clip.y, clip.width, clip.height);
-            geom.sent_clip = Some(clip);
-        }
+    let clip = compute_clip_box(geom.current, output_rect, border_width as u8);
+    if geom.sent_clip.is_none_or(|sent| !sent.eql(clip)) {
+        river_window.set_clip_box(clip.x, clip.y, clip.width, clip.height);
+        geom.sent_clip = Some(clip);
     }
 }
 
@@ -354,47 +357,38 @@ mod tests {
     }
 
     #[test]
-    fn content_rect_hides_window_hanging_off_bottom_edge() {
+    fn compute_clip_box_clips_window_hanging_off_bottom_edge() {
+        // Window top is inside output, bottom extends below output bottom.
         let window = Rectangle {
             x: 100,
             y: 800,
             width: 800,
             height: 400,
         };
+        let clip = compute_clip_box(window, OUTPUT, 3);
 
-        assert_eq!(content_rect(window, OUTPUT, 3), None);
+        // Visible height is from window top to output bottom.
+        assert_eq!(clip.height, 280);
+        assert_eq!(clip.width, 800);
+        assert_eq!(clip.x, -3);
+        assert_eq!(clip.y, -3);
     }
 
     #[test]
-    fn content_rect_hides_window_hanging_off_right_edge() {
+    fn compute_clip_box_clips_window_hanging_off_right_edge() {
+        // Window left is inside output, right extends past output right.
         let window = Rectangle {
             x: 1500,
             y: 100,
             width: 600,
             height: 400,
         };
+        let clip = compute_clip_box(window, OUTPUT, 3);
 
-        assert_eq!(content_rect(window, OUTPUT, 3), None);
-    }
-
-    #[test]
-    fn content_rect_keeps_full_size_for_window_inside_output() {
-        let window = Rectangle {
-            x: 100,
-            y: 100,
-            width: 800,
-            height: 600,
-        };
-
-        assert_eq!(
-            content_rect(window, OUTPUT, 3),
-            Some(Rectangle {
-                x: 103,
-                y: 103,
-                width: 794,
-                height: 594,
-            })
-        );
+        assert_eq!(clip.width, 420); // 1920 - 1500
+        assert_eq!(clip.height, 400);
+        assert_eq!(clip.x, -3);
+        assert_eq!(clip.y, -3);
     }
 
     #[test]

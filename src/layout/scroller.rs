@@ -154,12 +154,7 @@ pub fn apply(
     }
 
     for window in windows.iter_mut() {
-        let border_width = if window.is_fullscreen {
-            0
-        } else {
-            config.border.width as i32
-        };
-        common::skip_if_at_rest(window, output_rect, border_width);
+        common::skip_if_at_rest(window);
     }
 }
 
@@ -286,6 +281,7 @@ mod tests {
         for w in windows.iter_mut() {
             if let Some(finish) = w.finish {
                 w.current = finish;
+                w.sent_current = Some(finish);
                 w.finish = None;
             }
         }

@@ -50,7 +50,7 @@ pub struct WindowGeom {
     pub current: Rectangle,
     /// Floating-rect anchor captured at pointer-drag start.
     pub drag_origin: Option<Rectangle>,
-    /// Last full content geometry sent to the compositor.
+    /// Last geometry sent to the compositor; used to skip redundant requests.
     pub sent_current: Option<Rectangle>,
     /// Layout target computed by the layout pass; the coordinator snaps
     /// `current` to it (no animation).
