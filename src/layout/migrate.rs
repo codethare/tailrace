@@ -4,16 +4,8 @@
 //! Output removal: migrating windows to a surviving output, and detaching
 //! workspaces when no output is left.
 
-use crate::types::{DetachedOutput, Window, WindowGeom};
+use crate::types::{DetachedOutput, Window};
 use crate::wm::WindowManager;
-
-pub(super) fn reset_sent_caches(geom: &mut WindowGeom) {
-    geom.sent_visible = None;
-    geom.sent_current = None;
-    geom.sent_clip = None;
-    geom.sent_border_focused = None;
-    geom.sent_border_width = None;
-}
 
 pub(super) fn exit_fullscreen_and_close_closing(wm: &mut WindowManager, output_idx: usize) {
     let output_rect = wm.outputs[output_idx].rectangle;

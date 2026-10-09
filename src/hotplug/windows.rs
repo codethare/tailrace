@@ -55,8 +55,8 @@ fn fullscreen_window_sends_no_border_and_zero_origin_clip() {
                 "fullscreen window must not set a border, got {args}"
             );
         }
-        if op == 21 {
-            // set_clip_box(x, y, w, h)
+        if op == REQ_WIN_SET_CONTENT_CLIP_BOX {
+            // set_content_clip_box(x, y, w, h)
             let v: Vec<i32> = args
                 .split(',')
                 .map(|a| a.trim_start_matches('i').parse().unwrap())
@@ -324,5 +324,212 @@ fn floating_windows_raise_above_tiled_ones() {
         raised.last(),
         Some(&nodes[1]),
         "the floating window must be the last one raised, got {raised:?}"
+    );
+}
+
+/// Ordering requests (place_top / place_above) seen for the given nodes.
+fn ordering_requests(server: &MiniServer, nodes: &[ObjectId]) -> Vec<(ObjectId, u16, String)> {
+    server
+        .request_log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(object, op, _)| {
+            nodes.contains(object) && (*op == REQ_NODE_PLACE_TOP || *op == REQ_NODE_PLACE_ABOVE)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Windows are told the capabilities tailrace honours: fullscreen yes,
+/// maximize/minimize/window menu no (river tells clients everything is
+/// supported when the request is never made, which produces dead buttons).
+#[test]
+fn new_windows_are_told_the_supported_capabilities() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    // Capabilities are sent while the window is still pending (the "tell the
+    // client what we are" pass), so drive the pending flow explicitly.
+    let win = s.add_pending_window(&mut sv);
+    s.manage(&mut sv);
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let caps: Vec<String> = sv
+        .requests_for(&win)
+        .into_iter()
+        .filter(|(_, op, _)| *op == REQ_WIN_SET_CAPABILITIES)
+        .map(|(_, _, args)| args)
+        .collect();
+    // capabilities::fullscreen = 4
+    assert_eq!(caps, vec!["u4".to_string()], "fullscreen only");
+}
+
+/// The bounds logged for a window, in order.
+fn dimension_bounds(server: &MiniServer, window: &ObjectId) -> Vec<String> {
+    server
+        .requests_for(window)
+        .into_iter()
+        .filter(|(_, op, _)| *op == REQ_WIN_SET_DIMENSION_BOUNDS)
+        .map(|(_, _, args)| args)
+        .collect()
+}
+
+/// A window is bounded to its slot so that a client which ignores
+/// propose_dimensions still does not grow past it.
+#[test]
+fn windows_are_bounded_to_their_slot() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let win = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    let geom = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert_eq!(
+        dimension_bounds(&sv, &win),
+        vec![format!("i{},i{}", geom.width - 6, geom.height - 6)],
+        "content size of the slot, borders excluded"
+    );
+
+    // A manage pass without a layout change must not repeat it.
+    sv.clear_request_log();
+    s.manage(&mut sv);
+    assert!(dimension_bounds(&sv, &win).is_empty());
+
+    // Shrinking the column re-bounds the window.
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::AdjustWindowWidth(-0.2),
+    );
+    s.manage(&mut sv);
+    let geom = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert_eq!(
+        dimension_bounds(&sv, &win),
+        vec![format!("i{},i{}", geom.width - 6, geom.height - 6)]
+    );
+}
+
+/// A window under screen capture keeps its size while the layout still moves
+/// it: resizing a captured window rescales the stream.
+#[test]
+fn a_captured_window_keeps_its_size_while_the_layout_moves_it() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let win = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    s.send(
+        &mut sv,
+        win.clone(),
+        EVT_WIN_CAPTURE_SESSIONS,
+        vec![Argument::Uint(1)],
+    );
+    s.manage(&mut sv);
+    assert_eq!(
+        s.state.wm.outputs[0].workspace_list[0].window_list[0]
+            .geom
+            .capture_sessions,
+        1
+    );
+
+    sv.clear_request_log();
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::AdjustWindowWidth(-0.2),
+    );
+    s.manage(&mut sv);
+    assert_eq!(
+        count_requests(&sv, &win, REQ_WIN_PROPOSE_DIMENSIONS),
+        0,
+        "a captured window must not be resized"
+    );
+    assert!(dimension_bounds(&sv, &win).is_empty());
+    let geom = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert!(
+        node_positions(&sv, geom.x + 3, geom.y + 3) > 0,
+        "the captured window must still follow the layout"
+    );
+
+    // Once the capture ends, the pending size is proposed again.
+    sv.clear_request_log();
+    s.send(
+        &mut sv,
+        win.clone(),
+        EVT_WIN_CAPTURE_SESSIONS,
+        vec![Argument::Uint(0)],
+    );
+    s.manage(&mut sv);
+    assert_eq!(count_requests(&sv, &win, REQ_WIN_PROPOSE_DIMENSIONS), 1);
+    assert_eq!(dimension_bounds(&sv, &win).len(), 1);
+}
+
+/// Overlapping floats stack in focus order: focusing a float raises it above
+/// the other floats (place_above moves only the one node that changes).
+#[test]
+fn the_focused_float_stacks_above_the_other_floats() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+
+    // Both are floating; focus the first one directly (the layout, not the
+    // keybinding, decides whether a float can be focused by direction) and run
+    // a layout pass, which is what reorders the nodes.
+    let nodes = children_with_interface(&sv, "river_node_v1");
+    assert_eq!(nodes.len(), 2, "one node per window");
+    assert!(
+        s.state.wm.outputs[0].workspace_list[0]
+            .window_list
+            .iter()
+            .all(|w| w.geom.is_floating)
+    );
+    s.state.wm.outputs[0].workspace_list[0].focused_window_idx = Some(0);
+    s.state.wm.status = crate::types::Status::Layout;
+
+    sv.clear_request_log();
+    s.manage(&mut sv);
+    let ordering = ordering_requests(&sv, &nodes);
+    let last = ordering.last().expect("floats must be ordered");
+    assert_eq!(
+        last.0, nodes[0],
+        "the focused float must be ordered last, got {ordering:?}"
+    );
+    assert_eq!(
+        last.1, REQ_NODE_PLACE_ABOVE,
+        "only the focused float moves, above the other one: {ordering:?}"
+    );
+    assert!(
+        last.2.contains(&format!("{:?}", nodes[1])),
+        "it must be placed above the other float: {last:?}"
     );
 }

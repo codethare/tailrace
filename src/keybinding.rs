@@ -114,8 +114,11 @@ pub fn binding_pressed(
 ) {
     use crate::types::Status;
 
-    // Pointer ops swallow keyboard events.
-    if matches!(state.wm.status, Status::PointerAction(_)) {
+    // Pointer and touch ops swallow keyboard events.
+    if matches!(
+        state.wm.status,
+        Status::PointerAction(_) | Status::TouchAction { .. }
+    ) {
         return;
     }
     // Suppress keybindings while the session is locked.

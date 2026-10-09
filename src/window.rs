@@ -5,6 +5,7 @@
 
 use wayland_client::{Dispatch, Proxy, QueueHandle};
 
+use crate::actions::PointerAction;
 use crate::app::AppData;
 use crate::layout::{self, common};
 use crate::river::river_window_v1::{self, RiverWindowV1};
@@ -37,6 +38,16 @@ pub fn window_event(
                 app_id.clone(),
                 PendingField::AppId,
             );
+        }
+        // Sent once when the window object is created, i.e. before the first
+        // `dimensions` maps it, so the pending phase has to keep the count.
+        river_window_v1::Event::CaptureSessions { count } => {
+            for pending in &mut state.wm.pending_windows {
+                if &pending.river_window == river_window {
+                    pending.capture_sessions = *count;
+                    break;
+                }
+            }
         }
         _ => {}
     }
@@ -130,14 +141,66 @@ pub fn window_event(
                         .geom
                         .is_fullscreen = false;
                 }
-                // river >= 0.4.6 reports how many capture sessions target this
-                // window; not used yet (a recording indicator or a policy for
-                // hidden windows would read it).
-                river_window_v1::Event::CaptureSessions { .. } => {}
-                // River v6 touch move/resize requests are vendored but not
-                // implemented; ignoring them must not dirty the layout.
-                river_window_v1::Event::TouchMoveRequested { .. }
-                | river_window_v1::Event::TouchResizeRequested { .. } => return false,
+                // While a window is being captured (screencast, window share)
+                // the layout stops proposing new dimensions so the stream does
+                // not rescale; positions still follow the layout.
+                river_window_v1::Event::CaptureSessions { count } => {
+                    let geom = &mut state
+                        .wm
+                        .workspace_mut(output_idx, workspace_idx)
+                        .unwrap()
+                        .window_list[win_idx]
+                        .geom;
+                    geom.capture_sessions = count;
+                    if count == 0 {
+                        // The window kept its size for the whole capture, so
+                        // the layout target still has to reach it.
+                        geom.forget_sent();
+                    }
+                }
+                // The window asked for an interactive move/resize with the
+                // pointer or a touch point (client-side titlebar drag, an
+                // xdg_toplevel.resize grip).
+                river_window_v1::Event::PointerMoveRequested { seat } => {
+                    crate::seat::pointer_op_requested(
+                        state,
+                        river_window,
+                        &seat,
+                        PointerAction::MoveWindow,
+                    );
+                    return false;
+                }
+                river_window_v1::Event::PointerResizeRequested { seat, .. } => {
+                    crate::seat::pointer_op_requested(
+                        state,
+                        river_window,
+                        &seat,
+                        PointerAction::ResizeWindow,
+                    );
+                    return false;
+                }
+                river_window_v1::Event::TouchMoveRequested { seat, touch_point } => {
+                    crate::seat::touch_op_requested(
+                        state,
+                        river_window,
+                        &seat,
+                        touch_point,
+                        PointerAction::MoveWindow,
+                    );
+                    return false;
+                }
+                river_window_v1::Event::TouchResizeRequested {
+                    seat, touch_point, ..
+                } => {
+                    crate::seat::touch_op_requested(
+                        state,
+                        river_window,
+                        &seat,
+                        touch_point,
+                        PointerAction::ResizeWindow,
+                    );
+                    return false;
+                }
                 _ => return false,
             }
             layout::update(&mut state.wm);
@@ -250,6 +313,7 @@ fn add_window(
     let mut geom = WindowGeom::new(config.default_window_width, start_rect);
     geom.is_floating = is_floating;
     geom.floating = floating_rect;
+    geom.capture_sessions = pending.capture_sessions;
     let window = Window {
         river_window: pending.river_window,
         river_node,

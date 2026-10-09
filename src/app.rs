@@ -154,6 +154,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppData {
                     initialized: false,
                     title: None,
                     app_id: None,
+                    capture_sessions: 0,
                 });
                 state.wm.status = Status::Layout;
             }
@@ -295,7 +296,13 @@ pub fn manage(state: &mut AppData) {
         }
         Status::PointerAction(_action) => {
             seat.op_start_pointer();
-            crate::seat::pointer_action(&mut state.wm);
+            crate::seat::op_action(&mut state.wm);
+        }
+        Status::TouchAction { touch_point, .. } => {
+            // river ignores a repeat request for a touch point that already has
+            // an operation, so this is safe to re-issue on every delta event.
+            seat.op_start_touch(touch_point);
+            crate::seat::op_action(&mut state.wm);
         }
         Status::SetupBindings => {
             crate::keybinding::setup_keybindings(state);

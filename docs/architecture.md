@@ -34,7 +34,8 @@ state machine once per sequence:
 | `SetupBindings` | Create xkb and pointer bindings from the config, then go to `Layout` |
 | `Layout` | `layout::apply` (init pending windows, hotplug, then `update` + focus/borders) and `layout::snap_to_finish` (commit geometry), then `None` |
 | `Overview` | `overview::apply_borders` + `snap_to_finish`, then `None` |
-| `PointerAction` | `op_start_pointer` and follow the drag in `seat::pointer_action`; ends on `OpRelease` |
+| `PointerAction` | `op_start_pointer` and follow the drag in `seat::op_action`; ends on `OpRelease` |
+| `TouchAction` | `op_start_touch` for the requesting touch point, then `seat::op_action`; ends on `op_release_touch` (or `op_cancel_touch`, which restores the geometry) |
 | `Exit` | `river_window_manager_v1.exit_session` |
 | `None` | `seat.op_end()` |
 
@@ -51,10 +52,12 @@ with `render_finish`.
 2. `layout::apply` handles pending windows, removed outputs (migrate or
    detach) and restored outputs, then `apply_focus_and_borders`.
 3. `layout::snap_to_finish` sets `current = finish` and issues the protocol
-   requests through `layout::common::place_window`: `propose_dimensions`,
-   `set_position`, `show`/`hide` and `set_clip_box`, each deduplicated against
-   the `sent_*` caches on `WindowGeom`. `raise_floating_windows` then raises
-   every float so floats stay above tiles.
+   requests through `layout::common::place_window`: `propose_dimensions` with
+   `set_dimension_bounds` (skipped while `geom.capture_sessions > 0`, so a
+   screencast does not rescale), `set_position`, `show`/`hide` and
+   `set_content_clip_box`, each deduplicated against the `sent_*` caches on
+   `WindowGeom`. `raise_floating_windows` then raises every float above the
+   tiles, the focused float last, using `place_above` for all but the first.
 
 Focus is derived state: `focused_output_idx` → `focused_workspace_idx` →
 `focused_window_idx`. `apply_focus_and_borders` is the only place that talks
@@ -63,6 +66,12 @@ to river about focus, and it only does so when the target differs from
 that cache. Focus commands are suppressed entirely while a layer-shell surface
 holds exclusive focus or the session is locked; `needs_refocus` makes the next
 sequence retry.
+
+Interactive move/resize ops (pointer bindings, and the window's own
+`pointer_*_requested` / `touch_*_requested` events in `window.rs`) only target
+floating, non-fullscreen windows: `seat::begin_op` is the single place that
+starts one, and `seat::op_action` re-sends the op window's geometry on every
+manage sequence of the operation.
 
 ## The test harness (`src/hotplug/`)
 
@@ -94,6 +103,10 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   pass only run from there. A test asserting "no request was sent" after a
   bare poke proves nothing — that bug was already fixed once in
   `manage.rs::exclusive_layer_shell_focus_skips_focus_commands`.
+- **Raising needs a Layout pass too.** `apply_focus_and_borders` (focus,
+  borders, `place_top`) and `raise_floating_windows` are only called from
+  `layout::apply`, so changing `focused_window_idx` directly and managing with
+  `Status::None` sends no ordering requests at all.
 - **Windows are mapped on `Dimensions`.** `window.rs` moves a pending window
   into a workspace when its `dimensions` event arrives, which is also where
   `window_rules` are evaluated; river sends `app_id`/`title` before

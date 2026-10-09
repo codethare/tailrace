@@ -16,7 +16,7 @@ pub use focus::apply_window_border;
 use focus::{apply_focus_and_borders, raise_floating_windows};
 use migrate::{
     detach_output, exit_fullscreen_and_close_closing, fixup_indices_after_output_removal,
-    migrate_detached_into, migrate_output_windows, migrate_windows_by_name, reset_sent_caches,
+    migrate_detached_into, migrate_output_windows, migrate_windows_by_name,
 };
 
 use crate::river::river_seat_v1::RiverSeatV1;
@@ -92,6 +92,9 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         if wm.config.no_csd {
             river_window.use_ssd();
         }
+        // Fullscreen requests are honoured; maximize, minimize and the window
+        // menu are ignored, so clients should not offer them.
+        river_window.set_capabilities(crate::river::river_window_v1::Capabilities::Fullscreen);
         river_window.set_tiled(common::edges_all());
         river_window.propose_dimensions(0, 0);
         river_window.hide();
@@ -194,7 +197,7 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         // are re-issued for the fresh output.
         for workspace in &mut output.workspace_list {
             for window in &mut workspace.window_list {
-                reset_sent_caches(&mut window.geom);
+                window.geom.forget_sent();
             }
         }
         restored_any = true;

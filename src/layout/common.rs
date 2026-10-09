@@ -133,6 +133,9 @@ pub fn clamp_floating_into_output(geom: &mut WindowGeom, output_rect: Rectangle)
     geom.floating.y = clamp_i32(geom.floating.y, top, bottom - geom.floating.height);
 }
 
+/// Intersection of the window with the output, in node coordinates (the
+/// border inset keeps the box aligned with the content, which sits
+/// `border_width` inside the window rect).
 pub fn compute_clip_box(
     window_rect: Rectangle,
     output_rect: Rectangle,
@@ -175,6 +178,24 @@ pub fn compute_clip_box(
     }
 }
 
+/// Send the window's proposed content size and dimension bound, unless the
+/// window is currently being captured (resizing a captured window rescales
+/// the stream).
+fn propose_dimensions(river_window: &RiverWindowV1, geom: &mut WindowGeom, border_width: i32) {
+    let content = (
+        (geom.current.width - 2 * border_width).max(0),
+        (geom.current.height - 2 * border_width).max(0),
+    );
+    if geom.capture_sessions > 0 || geom.sent_dimensions == Some(content) {
+        return;
+    }
+    river_window.propose_dimensions(content.0, content.1);
+    // The same size as an explicit bound: windows that ignore the proposal
+    // should still not grow past their slot.
+    river_window.set_dimension_bounds(content.0, content.1);
+    geom.sent_dimensions = Some(content);
+}
+
 /// Send geometry/show/clip requests for a window, skipping redundant ones.
 /// Ported from rill-ed `placeWindow` (protocol IO; not unit-tested).
 pub fn place_window(
@@ -190,11 +211,9 @@ pub fn place_window(
         config.border.width as i32
     };
 
+    propose_dimensions(river_window, geom, border_width);
+
     if geom.sent_current.is_none_or(|sent| !sent.eql(geom.current)) {
-        river_window.propose_dimensions(
-            (geom.current.width - 2 * border_width).max(0),
-            (geom.current.height - 2 * border_width).max(0),
-        );
         river_node.set_position(geom.current.x + border_width, geom.current.y + border_width);
         geom.sent_current = Some(geom.current);
     }
@@ -222,9 +241,13 @@ pub fn place_window(
         geom.sent_visible = Some(visible);
     }
 
+    // Content clip box (the x/y are in node coordinates, hence the border
+    // inset in compute_clip_box): river then draws the borders around the
+    // visible content, so a window scrolled half off the output keeps them at
+    // the edge instead of having them clipped away.
     let clip = compute_clip_box(geom.current, output_rect, border_width as u8);
     if geom.sent_clip.is_none_or(|sent| !sent.eql(clip)) {
-        river_window.set_clip_box(clip.x, clip.y, clip.width, clip.height);
+        river_window.set_content_clip_box(clip.x, clip.y, clip.width, clip.height);
         geom.sent_clip = Some(clip);
     }
 }

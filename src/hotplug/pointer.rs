@@ -252,8 +252,278 @@ fn focusing_another_output_warps_the_pointer_to_its_centre() {
     );
 }
 
+/// The window itself asks for an interactive move (a client-side titlebar
+/// drag). The request only takes effect for floating windows, and then runs
+/// through the same op machinery as the `move_window` pointer binding.
 #[test]
-fn v6_touch_events_are_ignored() {
+fn client_move_request_drags_a_floating_window() {
+    let (mut s, mut sv) = build();
+    let seat = s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+    let origin = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+
+    sv.clear_request_log();
+    s.send(
+        &mut sv,
+        window,
+        EVT_WIN_POINTER_MOVE_REQUESTED,
+        vec![Argument::Object(seat.clone())],
+    );
+    s.manage(&mut sv);
+    assert!(
+        matches!(
+            s.state.wm.status,
+            crate::types::Status::PointerAction(crate::actions::PointerAction::MoveWindow)
+        ),
+        "a pointer move request must start the move drag, got {:?}",
+        s.state.wm.status
+    );
+    assert_eq!(
+        count_requests(&sv, &seat, REQ_SEAT_OP_START_POINTER),
+        1,
+        "the drag must ask river for the pointer operation"
+    );
+
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA,
+        vec![Argument::Int(30), Argument::Int(-20)],
+    );
+    s.manage(&mut sv);
+    let moved = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert_eq!(
+        (moved.x, moved.y),
+        (origin.x + 30, origin.y - 20),
+        "the window must follow the delta"
+    );
+
+    s.send(&mut sv, seat, EVT_SEAT_OP_RELEASE, vec![]);
+    assert_eq!(s.state.wm.status, crate::types::Status::None);
+    s.manage(&mut sv);
+}
+
+/// The window asks to be resized (an xdg_toplevel.resize edge grip).
+/// `shortcut:` the requested edges are ignored, exactly like the
+/// `resize_window` binding: the window grows to the bottom right.
+#[test]
+fn client_resize_request_resizes_a_floating_window() {
+    let (mut s, mut sv) = build();
+    let seat = s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+    let origin = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+
+    s.send(
+        &mut sv,
+        window,
+        EVT_WIN_POINTER_RESIZE_REQUESTED,
+        vec![Argument::Object(seat.clone()), Argument::Uint(5)],
+    );
+    s.manage(&mut sv);
+    assert!(
+        matches!(
+            s.state.wm.status,
+            crate::types::Status::PointerAction(crate::actions::PointerAction::ResizeWindow)
+        ),
+        "a pointer resize request must start the resize drag, got {:?}",
+        s.state.wm.status
+    );
+
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA,
+        vec![Argument::Int(40), Argument::Int(20)],
+    );
+    s.manage(&mut sv);
+    let resized = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert_eq!(
+        (resized.width, resized.height),
+        (origin.width + 40, origin.height + 20)
+    );
+
+    s.send(&mut sv, seat, EVT_SEAT_OP_RELEASE, vec![]);
+    s.manage(&mut sv);
+}
+
+/// A touch point on a floating window moves it (river v6 interactive touch
+/// operations); deltas for other touch points are ignored, and releasing the
+/// point ends the operation.
+#[test]
+fn touch_move_request_drags_a_floating_window() {
+    let (mut s, mut sv) = build();
+    let seat = s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+    let origin = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+
+    s.send(
+        &mut sv,
+        window,
+        EVT_WIN_TOUCH_MOVE_REQUESTED,
+        vec![Argument::Object(seat.clone()), Argument::Int(7)],
+    );
+    s.manage(&mut sv);
+    assert!(
+        matches!(
+            s.state.wm.status,
+            crate::types::Status::TouchAction {
+                action: crate::actions::PointerAction::MoveWindow,
+                touch_point: 7
+            }
+        ),
+        "a touch move request must start a touch op, got {:?}",
+        s.state.wm.status
+    );
+    assert!(
+        count_requests(&sv, &seat, REQ_SEAT_OP_START_TOUCH) > 0,
+        "the op must be started with op_start_touch"
+    );
+
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA_TOUCH,
+        vec![Argument::Int(7), Argument::Int(25), Argument::Int(15)],
+    );
+    s.manage(&mut sv);
+    let moved = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert_eq!(
+        (moved.x, moved.y),
+        (origin.x + 25, origin.y + 15),
+        "the window must follow the touch point"
+    );
+
+    // A delta for a different touch point belongs to another operation.
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA_TOUCH,
+        vec![Argument::Int(8), Argument::Int(400), Argument::Int(400)],
+    );
+    s.manage(&mut sv);
+    let unchanged = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert!(unchanged.eql(moved), "foreign touch deltas are ignored");
+
+    s.send(
+        &mut sv,
+        seat,
+        EVT_SEAT_OP_RELEASE_TOUCH,
+        vec![Argument::Int(7)],
+    );
+    assert_eq!(s.state.wm.status, crate::types::Status::None);
+    assert!(
+        s.state.wm.outputs[0].workspace_list[0].window_list[0]
+            .geom
+            .drag_origin
+            .is_none()
+    );
+    s.manage(&mut sv);
+}
+
+/// A cancelled touch point may have been a palm all along, so the geometry
+/// from before the operation is restored.
+#[test]
+fn touch_cancel_restores_the_geometry_from_before_the_op() {
+    let (mut s, mut sv) = build();
+    let seat = s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let window = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+    let origin = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+
+    s.send(
+        &mut sv,
+        window,
+        EVT_WIN_TOUCH_MOVE_REQUESTED,
+        vec![Argument::Object(seat.clone()), Argument::Int(3)],
+    );
+    s.manage(&mut sv);
+    s.send(
+        &mut sv,
+        seat.clone(),
+        EVT_SEAT_OP_DELTA_TOUCH,
+        vec![Argument::Int(3), Argument::Int(60), Argument::Int(60)],
+    );
+    s.manage(&mut sv);
+    assert!(
+        !s.state.wm.outputs[0].workspace_list[0].window_list[0]
+            .geom
+            .current
+            .eql(origin),
+        "sanity: the touch moved the window"
+    );
+
+    s.send(
+        &mut sv,
+        seat,
+        EVT_SEAT_OP_CANCEL_TOUCH,
+        vec![Argument::Int(3)],
+    );
+    let restored = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    assert!(
+        restored.eql(origin),
+        "cancel must undo the move: {restored:?}"
+    );
+    assert_eq!(s.state.wm.status, crate::types::Status::None);
+    s.manage(&mut sv);
+}
+
+/// Tiled windows are positioned by the layout, so interactive requests from
+/// them are ignored instead of starting a drag that the layout would undo.
+#[test]
+fn tiled_windows_ignore_interactive_move_resize_and_touch_requests() {
     let (mut s, mut sv) = build();
     let seat = s.add_seat(&mut sv);
     s.manage(&mut sv);
@@ -264,22 +534,35 @@ fn v6_touch_events_are_ignored() {
     s.check_consistent();
 
     let status = s.state.wm.status.clone();
-    s.send(
-        &mut sv,
-        window.clone(),
-        EVT_WIN_TOUCH_MOVE_REQUESTED,
-        vec![Argument::Object(seat.clone()), Argument::Int(1)],
-    );
-    s.send(
-        &mut sv,
-        window,
-        EVT_WIN_TOUCH_RESIZE_REQUESTED,
-        vec![
-            Argument::Object(seat.clone()),
-            Argument::Int(1),
-            Argument::Uint(1),
-        ],
-    );
+    for (opcode, args) in [
+        (
+            EVT_WIN_POINTER_MOVE_REQUESTED,
+            vec![Argument::Object(seat.clone())],
+        ),
+        (
+            EVT_WIN_POINTER_RESIZE_REQUESTED,
+            vec![Argument::Object(seat.clone()), Argument::Uint(1)],
+        ),
+        (
+            EVT_WIN_TOUCH_MOVE_REQUESTED,
+            vec![Argument::Object(seat.clone()), Argument::Int(1)],
+        ),
+        (
+            EVT_WIN_TOUCH_RESIZE_REQUESTED,
+            vec![
+                Argument::Object(seat.clone()),
+                Argument::Int(1),
+                Argument::Uint(1),
+            ],
+        ),
+    ] {
+        s.send(&mut sv, window.clone(), opcode, args);
+        s.manage(&mut sv);
+        assert_eq!(
+            s.state.wm.status, status,
+            "a tiled window must not enter an op (opcode {opcode})"
+        );
+    }
     s.send(
         &mut sv,
         seat.clone(),
@@ -294,15 +577,13 @@ fn v6_touch_events_are_ignored() {
     );
     s.send(
         &mut sv,
-        seat,
+        seat.clone(),
         EVT_SEAT_OP_CANCEL_TOUCH,
         vec![Argument::Int(2)],
     );
-
-    assert_eq!(
-        s.state.wm.status, status,
-        "touch events must not dirty layout"
-    );
+    assert_eq!(s.state.wm.status, status);
+    assert_eq!(count_requests(&sv, &seat, REQ_SEAT_OP_START_POINTER), 0);
+    assert_eq!(count_requests(&sv, &seat, REQ_SEAT_OP_START_TOUCH), 0);
     assert!(
         s.state.wm.outputs[0].workspace_list[0].window_list[0]
             .geom

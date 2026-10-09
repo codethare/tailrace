@@ -113,40 +113,57 @@ pub fn seat_event(
                 Status::PointerAction(action) => *action,
                 _ => return false,
             };
-            let Some(origin) = state
-                .wm
-                .workspace_mut(output_idx, workspace_idx)
-                .unwrap()
-                .window_list
-                .get_mut(focused_win_idx)
-                .and_then(|w| w.geom.drag_origin)
-            else {
-                return false;
+            apply_op_delta(
+                state,
+                output_idx,
+                workspace_idx,
+                focused_win_idx,
+                action,
+                dx,
+                dy,
+            );
+            false
+        }
+        river_seat_v1::Event::OpDeltaTouch {
+            touch_point,
+            dx,
+            dy,
+        } => {
+            let action = match state.wm.status {
+                Status::TouchAction {
+                    action,
+                    touch_point: current,
+                } if current == touch_point => action,
+                _ => return false,
             };
-            let output_rect = state.wm.outputs[output_idx].rectangle;
-            let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
-            let geom = &mut workspace.window_list[focused_win_idx].geom;
-
-            let output_left = output_rect.x;
-            let output_right = output_rect.x + output_rect.width;
-            let output_top = output_rect.y;
-            let output_bottom = output_rect.y + output_rect.height;
-
-            match action {
-                PointerAction::MoveWindow => {
-                    let width = geom.current.width;
-                    let height = geom.current.height;
-                    geom.floating.x = (origin.x + dx).clamp(output_left, output_right - width);
-                    geom.floating.y = (origin.y + dy).clamp(output_top, output_bottom - height);
-                }
-                PointerAction::ResizeWindow => {
-                    geom.floating.width =
-                        (origin.width + dx).clamp(0, output_right - geom.current.x);
-                    geom.floating.height =
-                        (origin.height + dy).clamp(0, output_bottom - geom.current.y);
-                }
+            apply_op_delta(
+                state,
+                output_idx,
+                workspace_idx,
+                focused_win_idx,
+                action,
+                dx,
+                dy,
+            );
+            false
+        }
+        river_seat_v1::Event::OpCancelTouch { touch_point } => {
+            // Palm rejection: behave as if the operation never started.
+            if matches!(
+                state.wm.status,
+                Status::TouchAction { touch_point: current, .. } if current == touch_point
+            ) {
+                cancel_op(state, output_idx, workspace_idx, focused_win_idx);
             }
-            geom.current = geom.floating;
+            false
+        }
+        river_seat_v1::Event::OpReleaseTouch { touch_point } => {
+            if matches!(
+                state.wm.status,
+                Status::TouchAction { touch_point: current, .. } if current == touch_point
+            ) {
+                end_op(state, output_idx, workspace_idx, focused_win_idx);
+            }
             false
         }
         river_seat_v1::Event::Removed => {
@@ -157,30 +174,184 @@ pub fn seat_event(
         | river_seat_v1::Event::ShellSurfaceInteraction { .. }
         | river_seat_v1::Event::PointerPosition { .. } => false,
         river_seat_v1::Event::OpRelease => {
-            state.wm.status = Status::None;
-            if let Some(window) = state
-                .wm
-                .workspace_mut(output_idx, workspace_idx)
-                .unwrap()
-                .window_list
-                .get_mut(focused_win_idx)
-            {
-                window.geom.drag_origin = None;
-            }
-            // Hand the cursor back to the focused client.
-            if let Some(device) = &state.cursor_shape {
-                // river ignores the serial for the WM (river_seat_v1 v4).
-                device.set_shape(0, Shape::Default);
-            }
+            end_op(state, output_idx, workspace_idx, focused_win_idx);
             false
         }
-        // River v6 touch operations are vendored but not started by tailrace.
-        river_seat_v1::Event::OpDeltaTouch { .. }
-        | river_seat_v1::Event::OpReleaseTouch { .. }
-        | river_seat_v1::Event::OpCancelTouch { .. } => false,
     }
 }
 
+/// Apply a cumulative op delta to the op's window: it follows the pointer or
+/// touch point, clamped to the output (rill-ed op handling).
+fn apply_op_delta(
+    state: &mut AppData,
+    output_idx: usize,
+    workspace_idx: usize,
+    window_idx: usize,
+    action: PointerAction,
+    dx: i32,
+    dy: i32,
+) {
+    let Some(origin) = state
+        .wm
+        .workspace_mut(output_idx, workspace_idx)
+        .unwrap()
+        .window_list
+        .get_mut(window_idx)
+        .and_then(|w| w.geom.drag_origin)
+    else {
+        return;
+    };
+    let output_rect = state.wm.outputs[output_idx].rectangle;
+    let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
+    let geom = &mut workspace.window_list[window_idx].geom;
+
+    let output_left = output_rect.x;
+    let output_right = output_rect.x + output_rect.width;
+    let output_top = output_rect.y;
+    let output_bottom = output_rect.y + output_rect.height;
+
+    match action {
+        PointerAction::MoveWindow => {
+            let width = geom.current.width;
+            let height = geom.current.height;
+            geom.floating.x = (origin.x + dx).clamp(output_left, output_right - width);
+            geom.floating.y = (origin.y + dy).clamp(output_top, output_bottom - height);
+        }
+        PointerAction::ResizeWindow => {
+            geom.floating.width = (origin.width + dx).clamp(0, output_right - geom.current.x);
+            geom.floating.height = (origin.height + dy).clamp(0, output_bottom - geom.current.y);
+        }
+    }
+    geom.current = geom.floating;
+}
+
+/// End an operation, keeping the geometry it reached.
+fn end_op(state: &mut AppData, output_idx: usize, workspace_idx: usize, window_idx: usize) {
+    if let Some(window) = state
+        .wm
+        .workspace_mut(output_idx, workspace_idx)
+        .and_then(|ws| ws.window_list.get_mut(window_idx))
+    {
+        window.geom.drag_origin = None;
+    }
+    // Hand the cursor back to the focused client.
+    if let Some(device) = &state.cursor_shape {
+        // river ignores the serial for the WM (river_seat_v1 v4).
+        device.set_shape(0, Shape::Default);
+    }
+    state.wm.status = Status::None;
+}
+
+/// End an operation as if it never started (touch cancellation: the contact
+/// may have been a palm from the beginning).
+fn cancel_op(state: &mut AppData, output_idx: usize, workspace_idx: usize, window_idx: usize) {
+    if let Some(window) = state
+        .wm
+        .workspace_mut(output_idx, workspace_idx)
+        .and_then(|ws| ws.window_list.get_mut(window_idx))
+        && let Some(origin) = window.geom.drag_origin.take()
+    {
+        window.geom.floating = origin;
+        window.geom.current = origin;
+    }
+    state.wm.status = Status::None;
+}
+
+/// Only floating, non-fullscreen windows can be moved or resized: the layout
+/// owns the geometry of everything else.
+fn is_draggable(wm: &crate::wm::WindowManager, location: (usize, usize, usize)) -> bool {
+    wm.workspace(location.0, location.1)
+        .and_then(|ws| ws.window_list.get(location.2))
+        .is_some_and(|window| window.geom.is_floating && !window.geom.is_fullscreen)
+}
+
+/// Remember the geometry an interactive op starts from and take the cursor
+/// shape.
+fn begin_op(state: &mut AppData, location: (usize, usize, usize), status: Status) -> bool {
+    let action = match status {
+        Status::PointerAction(action) => action,
+        Status::TouchAction { action, .. } => action,
+        _ => return false,
+    };
+    if !is_draggable(&state.wm, location) {
+        return false;
+    }
+    let (output_idx, workspace_idx, window_idx) = location;
+    let Some(window) = state
+        .wm
+        .workspace_mut(output_idx, workspace_idx)
+        .and_then(|ws| ws.window_list.get_mut(window_idx))
+    else {
+        return false;
+    };
+    window.geom.drag_origin = Some(window.geom.current);
+    // Cursor feedback for the drag: river applies a WM-set shape while no
+    // client has pointer focus, which is exactly during an op.
+    if let Some(device) = &state.cursor_shape {
+        let shape = match action {
+            PointerAction::MoveWindow => Shape::Move,
+            PointerAction::ResizeWindow => Shape::NwseResize,
+        };
+        device.set_shape(0, shape);
+    }
+    state.wm.status = status;
+    true
+}
+
+/// The window itself asked to be moved or resized with the pointer (a
+/// client-side titlebar drag, an xdg_toplevel.resize edge grip).
+/// shortcut: resize ignores the requested edges and grows to the bottom right
+/// like the pointer bindings do, upgrade when edge-aware resizing is wanted.
+pub fn pointer_op_requested(
+    state: &mut AppData,
+    window: &RiverWindowV1,
+    seat: &RiverSeatV1,
+    action: PointerAction,
+) {
+    // op_start_pointer takes no seat argument, so a request from any other
+    // seat would drive the wrong device.
+    if state.river_seat.as_ref() != Some(seat) {
+        return;
+    }
+    let Some(location) = state.wm.locate_window(window) else {
+        return;
+    };
+    if !is_draggable(&state.wm, location) {
+        return;
+    }
+    // The op acts on the focused window (op_action reads it), so focus follows
+    // the request.
+    focus_window(state, window);
+    begin_op(state, location, Status::PointerAction(action));
+}
+
+/// The window asked to be moved or resized with a touch point.
+pub fn touch_op_requested(
+    state: &mut AppData,
+    window: &RiverWindowV1,
+    seat: &RiverSeatV1,
+    touch_point: i32,
+    action: PointerAction,
+) {
+    if state.river_seat.as_ref() != Some(seat) {
+        return;
+    }
+    let Some(location) = state.wm.locate_window(window) else {
+        return;
+    };
+    if !is_draggable(&state.wm, location) {
+        return;
+    }
+    focus_window(state, window);
+    begin_op(
+        state,
+        location,
+        Status::TouchAction {
+            action,
+            touch_point,
+        },
+    );
+}
 /// Rebuild pointer bindings from config (rill-ed setupPointerBindings).
 pub fn setup_pointer_bindings(state: &mut AppData) {
     for binding in state.pointer_bindings.drain(..) {
@@ -310,9 +481,10 @@ pub fn layer_shell_seat_event(
     }
 }
 
-/// Send the current geometry of the focused window for a pointer op
-/// (rill-ed pointerAction, called at the start of the manage cycle).
-pub fn pointer_action(wm: &mut crate::wm::WindowManager) {
+/// Send the current geometry of the focused window for an in-progress pointer
+/// or touch operation (rill-ed pointerAction, called at the start of every
+/// manage sequence of the operation).
+pub fn op_action(wm: &mut crate::wm::WindowManager) {
     let Some((output_idx, workspace_idx)) = wm.current_ws_idx() else {
         return;
     };
@@ -337,7 +509,10 @@ pub fn pointer_action(wm: &mut crate::wm::WindowManager) {
         }
     };
 
-    river_window.set_clip_box(0, 0, 0, 0);
+    river_window.set_content_clip_box(0, 0, 0, 0);
+    // The op disabled clipping; forget the cache so the next layout pass
+    // restores the box even when it is unchanged.
+    geom.sent_clip = None;
 
     let border = if geom.is_fullscreen { 0 } else { border_width };
     river_window.propose_dimensions(
@@ -382,24 +557,17 @@ impl Dispatch<RiverPointerBindingV1, ()> for AppData {
         let Some(action) = pointer_binding_action(state, proxy) else {
             return;
         };
-        // Drag the focused window only; needs a floating, non-fullscreen one.
-        let Some(window) = state.wm.focused_window_mut() else {
+        // Drag the focused window; begin_op rejects tiled and fullscreen ones.
+        let Some(location) = state.wm.current_ws_idx().and_then(|(o, w)| {
+            state
+                .wm
+                .workspace(o, w)?
+                .focused_window_idx
+                .map(|i| (o, w, i))
+        }) else {
             return;
         };
-        if !window.geom.is_floating || window.geom.is_fullscreen {
-            return;
-        }
-        // Cursor feedback for the drag: river applies a WM-set shape while no
-        // client has pointer focus, which is exactly during a pointer op.
-        if let Some(device) = &state.cursor_shape {
-            let shape = match action {
-                PointerAction::MoveWindow => Shape::Move,
-                PointerAction::ResizeWindow => Shape::NwseResize,
-            };
-            device.set_shape(0, shape);
-        }
-        window.geom.drag_origin = Some(window.geom.current);
-        state.wm.status = Status::PointerAction(action);
+        begin_op(state, location, Status::PointerAction(action));
     }
 }
 

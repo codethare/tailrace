@@ -65,23 +65,34 @@ const EVT_OUT_POSITION: u16 = 2;
 const EVT_OUT_DIMENSIONS: u16 = 3;
 // river_window_v1 events (declaration order: closed=0, dimensions_hint=1,
 // dimensions=2, app_id=3, ... fullscreen_requested=12, exit_fullscreen_requested=13,
-// touch_move_requested=19, touch_resize_requested=20)
+// ... capture_sessions=18, touch_move_requested=19, touch_resize_requested=20)
 const EVT_WIN_CLOSED: u16 = 0;
 const EVT_WIN_DIMENSIONS: u16 = 2;
 const EVT_WIN_APP_ID: u16 = 3;
 const EVT_WIN_TITLE: u16 = 4;
+const EVT_WIN_POINTER_MOVE_REQUESTED: u16 = 7;
+const EVT_WIN_POINTER_RESIZE_REQUESTED: u16 = 8;
 const EVT_WIN_FULLSCREEN_REQUESTED: u16 = 12;
 const EVT_WIN_EXIT_FULLSCREEN_REQUESTED: u16 = 13;
+const EVT_WIN_CAPTURE_SESSIONS: u16 = 18;
 const EVT_WIN_TOUCH_MOVE_REQUESTED: u16 = 19;
 const EVT_WIN_TOUCH_RESIZE_REQUESTED: u16 = 20;
+// river_window_v1 requests (propose_dimensions=3, …, set_capabilities=14,
+// … set_content_clip_box=22, set_dimension_bounds=23)
+const REQ_WIN_PROPOSE_DIMENSIONS: u16 = 3;
+const REQ_WIN_SET_CAPABILITIES: u16 = 14;
+const REQ_WIN_SET_CONTENT_CLIP_BOX: u16 = 22;
+const REQ_WIN_SET_DIMENSION_BOUNDS: u16 = 23;
 // river_xkb_binding_v1 events (pressed=0, released=1) and requests
 // (destroy=0, set_layout_override=1, enable=2, disable=3)
 const EVT_XKB_BINDING_PRESSED: u16 = 0;
 const REQ_XKB_DISABLE: u16 = 3;
 // both river_xkb_binding_v1 and river_pointer_binding_v1 have destroy = 0
 const REQ_BINDING_DESTROY: u16 = 0;
-// river_node_v1 requests (destroy=0, set_position=1, place_top=2)
+// river_node_v1 requests (destroy=0, set_position=1, place_top=2,
+// place_bottom=3, place_above=4, place_below=5)
 const REQ_NODE_PLACE_TOP: u16 = 2;
+const REQ_NODE_PLACE_ABOVE: u16 = 4;
 // river_seat_v1 events (removed=0, wl_seat=1, …)
 const EVT_SEAT_REMOVED: u16 = 0;
 // river_seat_v1 events (…, wl_seat=1)
@@ -99,13 +110,15 @@ const EVT_SESSION_UNLOCKED: u16 = 5;
 // river_window_manager_v1 requests (…, exit_session=6)
 const REQ_WM_EXIT_SESSION: u16 = 6;
 // river_seat_v1 requests (focus_window=1, clear_focus=3, op_start_pointer=4,
-// op_end=5, get_pointer_binding=6)
+// op_end=5, get_pointer_binding=6, pointer_warp=8, op_start_touch=9)
 const REQ_SEAT_DESTROY: u16 = 0;
 const REQ_SEAT_FOCUS_WINDOW: u16 = 1;
 const REQ_SEAT_CLEAR_FOCUS: u16 = 3;
+const REQ_SEAT_OP_START_POINTER: u16 = 4;
 const REQ_SEAT_OP_END: u16 = 5;
 const REQ_SEAT_GET_POINTER_BINDING: u16 = 6;
 const REQ_SEAT_POINTER_WARP: u16 = 8;
+const REQ_SEAT_OP_START_TOUCH: u16 = 9;
 // river_seat_v1 events (…, op_delta=6, op_release=7, pointer_position=8,
 // op_delta_touch=9, op_release_touch=10, op_cancel_touch=11)
 const EVT_SEAT_OP_DELTA: u16 = 6;

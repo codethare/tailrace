@@ -4,6 +4,7 @@
 //! Border colours, keyboard focus and raise order.
 
 use crate::layout::common;
+use crate::river::river_node_v1::RiverNodeV1;
 use crate::river::river_seat_v1::RiverSeatV1;
 use crate::types::{Color, Window, WindowGeom};
 use crate::wm::{LayerShellFocus, WindowManager};
@@ -103,16 +104,33 @@ pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seat: &RiverSeatV1
     }
 }
 
-/// Raise every floating window above all tiled windows. river commits the
-/// render list atomically at render_finish and skips reorder work when the
-/// order is unchanged, so re-issuing on every manage pass is free.
+/// Raise every floating window above all tiled windows, with the focused float
+/// last so overlapping floats stack in focus order. Only the nodes that move
+/// are restacked (`place_above`); river commits the render list atomically at
+/// render_finish and skips reorder work when the order is unchanged, so
+/// re-issuing on every manage pass is free.
 pub(super) fn raise_floating_windows(wm: &mut WindowManager) {
+    let focused = wm.focused_window().map(|w| w.river_window.clone());
     for output in &mut wm.outputs {
         for workspace in &mut output.workspace_list {
-            for window in &mut workspace.window_list {
-                if window.geom.is_floating {
-                    window.river_node.place_top();
+            let mut floats: Vec<usize> = (0..workspace.window_list.len())
+                .filter(|idx| workspace.window_list[*idx].geom.is_floating)
+                .collect();
+            if let Some(pos) = floats
+                .iter()
+                .position(|idx| Some(&workspace.window_list[*idx].river_window) == focused.as_ref())
+            {
+                let focused_idx = floats.remove(pos);
+                floats.push(focused_idx);
+            }
+            let mut raised: Option<RiverNodeV1> = None;
+            for idx in floats {
+                let window = &mut workspace.window_list[idx];
+                match &raised {
+                    Some(node) => window.river_node.place_above(node),
+                    None => window.river_node.place_top(),
                 }
+                raised = Some(window.river_node.clone());
             }
         }
     }

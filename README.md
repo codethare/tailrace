@@ -14,7 +14,11 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 ## Features
 
 * Per-workspace scrolling column layout; individual windows can float
-* Floating windows center on screen; drag with mouse to move, resize with mouse or keyboard
+* Floating windows center on screen; drag with mouse or touch to move, resize with mouse, touch or keyboard
+* Interactive move/resize requests from the window itself (a client-side titlebar drag, an `xdg_toplevel` resize grip) work on floating windows
+* Windows under screen capture keep their size; the layout still moves them
+* A window scrolled off the output is clipped at the edge with its borders drawn there
+* Clients are told tailrace only supports fullscreen, so no dead maximize/minimize buttons
 * 10 workspaces per output
 * Overview mode: grid of all windows across outputs/workspaces, vi-key navigation
 * Live-reloading TOML config

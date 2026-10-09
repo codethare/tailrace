@@ -25,10 +25,14 @@ the v0.4.8 release byte-for-byte. Because v6 is newer than the v0.4.8 release,
 tailrace requires River `main` or a later release advertising
 `river_window_manager_v1` v6.
 
-Newer additions are vendored but deliberately unused: capture-session counts,
-dimension bounds, touch operations, and xkb modifier watching. `src/window.rs`,
-`src/seat.rs`, and `src/output.rs` carry explicit no-op arms where the generated
-event enums require them.
+Newer additions are vendored and used: window capture-session counts, dimension
+bounds, v6 touch operations, client-requested interactive move/resize,
+capabilities and the content clip box. Still deliberately unused: xkb modifier
+watching (`river_xkb_bindings_seat_v1.modifiers_watch`), output capture-session
+counts, `set_presentation_mode`, and the xdg-shell requests tailrace ignores
+(maximize, minimize, window menu, `use_csd`, decoration surfaces).
+`src/window.rs`, `src/seat.rs`, and `src/output.rs` carry explicit no-op arms
+where the generated event enums require them.
 
 Verified by blob equality rather than by date, e.g. for the window management
 protocol:

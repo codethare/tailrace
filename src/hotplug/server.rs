@@ -255,12 +255,19 @@ impl MiniServer {
         &mut self,
         interface: &'static wayland_backend::protocol::Interface,
     ) -> ObjectId {
+        // The version decides which requests the client may send: river main
+        // advertises v6 for the window-management objects, and tailrace v6
+        // paths (touch ops, content clip, capabilities) are rejected on v4.
+        let version = match interface.name {
+            "river_window_v1" | "river_seat_v1" | "river_output_v1" => 6,
+            _ => 4,
+        };
         self.backend
             .handle()
             .create_object(
                 self.client.clone(),
                 interface,
-                4,
+                version,
                 Arc::new(Obj {
                     children: Some(self.children.clone()),
                     requests: Some(self.request_log.clone()),

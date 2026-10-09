@@ -17,6 +17,9 @@ pub struct PendingWindow {
     pub initialized: bool,
     pub title: Option<String>,
     pub app_id: Option<String>,
+    /// river sends capture_sessions once when the window object is created,
+    /// before `dimensions` maps it, so the count has to survive the pending phase.
+    pub capture_sessions: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -48,10 +51,17 @@ pub struct WindowGeom {
     /// Geometry while floating (rest position).
     pub floating: Rectangle,
     pub current: Rectangle,
-    /// Floating-rect anchor captured at pointer-drag start.
+    /// Floating-rect anchor captured at pointer/touch-op start.
     pub drag_origin: Option<Rectangle>,
     /// Last geometry sent to the compositor; used to skip redundant requests.
     pub sent_current: Option<Rectangle>,
+    /// Last content size sent with `propose_dimensions` and
+    /// `set_dimension_bounds`; separate from `sent_current` because a captured
+    /// window keeps its size while the layout still moves it.
+    pub sent_dimensions: Option<(i32, i32)>,
+    /// Active river_window_v1.capture_sessions count (screen capture). While
+    /// it is non-zero the layout stops resizing the window.
+    pub capture_sessions: u32,
     /// Layout target computed by the layout pass; the coordinator snaps
     /// `current` to it (no animation).
     pub finish: Option<Rectangle>,
@@ -75,6 +85,8 @@ impl WindowGeom {
             current,
             drag_origin: None,
             sent_current: None,
+            sent_dimensions: None,
+            capture_sessions: 0,
             finish: None,
             sent_clip: None,
             sent_visible: None,
@@ -82,6 +94,17 @@ impl WindowGeom {
             sent_border_width: None,
             former_output_name: None,
         }
+    }
+
+    /// Forget what the compositor was told, so the next layout pass re-sends
+    /// geometry, size, clip, visibility and borders.
+    pub fn forget_sent(&mut self) {
+        self.sent_current = None;
+        self.sent_dimensions = None;
+        self.sent_clip = None;
+        self.sent_visible = None;
+        self.sent_border_focused = None;
+        self.sent_border_width = None;
     }
 }
 
@@ -168,6 +191,11 @@ pub struct OverviewHome {
 pub enum Status {
     Layout,
     PointerAction(PointerAction),
+    /// The touch point is carried along so delta events for other points are ignored.
+    TouchAction {
+        action: PointerAction,
+        touch_point: i32,
+    },
     Overview,
     SetupBindings,
     Exit,
