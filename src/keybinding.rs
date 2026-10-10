@@ -139,9 +139,17 @@ pub fn binding_pressed(
 }
 
 fn reload_config(state: &mut crate::app::AppData) {
-    let Some(new_config) = crate::config::reload(state.config_path.as_deref()) else {
-        eprintln!("tailrace: config reload failed, keeping the running config");
-        return;
+    let new_config = match crate::config::reload(state.config_path.as_deref()) {
+        Ok(config) => config,
+        Err(e) => {
+            // No config file at all is normal (built-in defaults are running);
+            // a read or parse error is not, and the user needs to see which
+            // key or line is wrong.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("tailrace: config reload failed, keeping the running config:\n{e}");
+            }
+            return;
+        }
     };
     state.wm.config = std::rc::Rc::new(new_config);
 

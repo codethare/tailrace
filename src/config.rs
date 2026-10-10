@@ -4,6 +4,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::de::Error as _;
+
 use crate::keybinding::{default_keybindings, default_pointer_bindings};
 use crate::types::Config;
 
@@ -31,6 +33,18 @@ fn config_paths() -> Vec<PathBuf> {
 
 fn parse(content: &str) -> Result<Config, toml::de::Error> {
     let mut config: Config = toml::from_str(content)?;
+    // Workspace numbers are 1-10 everywhere in the config
+    // (`focus_workspace_number`), so a rule outside that range is a typo, not a
+    // request to fall back to the focused workspace.
+    for (idx, rule) in config.window_rules.iter().enumerate() {
+        if let Some(number) = rule.open_on_workspace
+            && !(1..=10).contains(&number)
+        {
+            return Err(toml::de::Error::custom(format!(
+                "window_rules[{idx}].open_on_workspace = {number} is out of range (1-10)"
+            )));
+        }
+    }
     // Empty binding lists fall back to the built-in defaults (rill-ed
     // behavior); window_rules and spawn_at_startup default to empty.
     if config.keybindings.is_empty() {
@@ -64,20 +78,24 @@ pub fn load(explicit: Option<&Path>) -> Result<Config, io::Error> {
     Ok(default_config())
 }
 
-/// Reload config. Returns `None` (caller keeps the old config) when no file
-/// is found or parsing fails.
-pub fn reload(explicit: Option<&Path>) -> Option<Config> {
+/// Reload config. `Err` carries the read or parse error so the caller can
+/// report it; `ErrorKind::NotFound` means there is no config file, which is
+/// not an error worth interrupting the user for.
+pub fn reload(explicit: Option<&Path>) -> Result<Config, io::Error> {
     if let Some(path) = explicit {
-        return read(path).ok();
+        return read(path);
     }
     for path in config_paths() {
         match read(&path) {
-            Ok(config) => return Some(config),
+            Ok(config) => return Ok(config),
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(_) => return None,
+            Err(e) => return Err(e),
         }
     }
-    None
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "no tailrace config file found",
+    ))
 }
 
 pub fn default_config() -> Config {
@@ -141,6 +159,17 @@ mod tests {
         assert!(parse("[[window_rules]]\napp_id = \"x\"\nfloatng = true\n").is_err());
     }
 
+    #[test]
+    fn out_of_range_open_on_workspace_is_rejected() {
+        let rule = |number: i32| {
+            format!("[[window_rules]]\napp_id = \"x\"\nopen_on_workspace = {number}\n")
+        };
+        assert!(parse(&rule(0)).is_err(), "workspace numbers are 1-based");
+        assert!(parse(&rule(11)).is_err());
+        assert!(parse(&rule(1)).is_ok());
+        assert!(parse(&rule(10)).is_ok());
+    }
+
     /// The shipped example must parse against the schema and must not change
     /// behaviour when copied verbatim: its binding sections are commented out,
     /// so it falls back to the built-in defaults. A hand-maintained copy of
@@ -165,11 +194,13 @@ mod tests {
         std::fs::write(&path, "vertical_gap = 42\n").unwrap();
         assert_eq!(load(Some(&path)).unwrap().vertical_gap, 42);
 
-        // A broken file is an error for load, and keeps the old config (None)
-        // for reload.
+        // A broken file is an error for load, and reload hands the error back
+        // so the caller can show which line is wrong.
         std::fs::write(&path, "vertical_gap = \"nine\"\n").unwrap();
         assert!(load(Some(&path)).is_err());
-        assert!(reload(Some(&path)).is_none());
+        let err = reload(Some(&path)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("vertical_gap"), "{err}");
 
         // An explicitly named file that does not exist is reported, not
         // silently replaced by the built-in defaults.
@@ -178,7 +209,10 @@ mod tests {
             load(Some(&missing)).unwrap_err().kind(),
             std::io::ErrorKind::NotFound
         );
-        assert!(reload(Some(&missing)).is_none());
+        assert_eq!(
+            reload(Some(&missing)).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

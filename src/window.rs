@@ -9,7 +9,7 @@ use crate::actions::PointerAction;
 use crate::app::AppData;
 use crate::layout::{self, common};
 use crate::river::river_window_v1::{self, RiverWindowV1};
-use crate::types::{PendingWindow, Status, Window, WindowGeom};
+use crate::types::{PendingWindow, Status, Window, WindowGeom, WindowRule};
 use crate::wm::WindowManager;
 
 /// Handle a river_window_v1 event. Returns true when a manage sequence
@@ -274,15 +274,41 @@ fn set_pending_string(
     }
 }
 
-/// Move a pending window into the output's focused workspace (rill-ed `add`).
+/// Move a pending window into the workspace its rules select, or the focused
+/// one (rill-ed `add`). A rule naming an output that is not attached opens on
+/// the focused output instead.
 fn add_window(
     wm: &mut WindowManager,
     pending: PendingWindow,
-    output_idx: usize,
+    focused_output_idx: usize,
     qh: &QueueHandle<AppData>,
 ) {
     let config = wm.config.clone();
-    let ws_idx = wm.outputs[output_idx].focused_workspace_idx;
+    // For each rule field the first matching rule that sets it wins; `floating`
+    // is an any-match so a later rule cannot un-float a window.
+    let matched: Vec<&WindowRule> = config
+        .window_rules
+        .iter()
+        .filter(|rule| rule.matches(pending.app_id.as_deref(), pending.title.as_deref()))
+        .collect();
+    let output_idx = matched
+        .iter()
+        .find_map(|rule| rule.open_on_output.as_deref())
+        .and_then(|name| {
+            wm.outputs
+                .iter()
+                .position(|o| o.name.as_deref() == Some(name))
+        })
+        .unwrap_or(focused_output_idx);
+    let ws_idx = matched
+        .iter()
+        .find_map(|rule| rule.open_on_workspace)
+        .map_or(wm.outputs[output_idx].focused_workspace_idx, |n| n - 1);
+    let width = matched
+        .iter()
+        .find_map(|rule| rule.default_window_width)
+        .unwrap_or(config.default_window_width);
+
     let output = &mut wm.outputs[output_idx];
     let workspace = &mut output.workspace_list[ws_idx];
 
@@ -293,15 +319,13 @@ fn add_window(
         w.geom.former_output_name = None;
     }
 
-    let is_floating = config.window_rules.iter().any(|rule| {
-        rule.floating && rule.matches(pending.app_id.as_deref(), pending.title.as_deref())
-    });
+    let is_floating = matched.iter().any(|rule| rule.floating);
 
     // New windows start just off the right edge (or at the centered floating
     // rect) so the first manage pass moves them into place.
     let rightmost = common::initial_rectangle(output.non_exclusive, &config);
     let floating_rect = if is_floating {
-        common::center_rectangle(output.non_exclusive, &config)
+        common::center_rectangle(output.non_exclusive, &config, width)
     } else {
         rightmost
     };
@@ -310,7 +334,7 @@ fn add_window(
     start_rect.x = output.non_exclusive.x + output.non_exclusive.width;
 
     let river_node = pending.river_window.get_node(qh, ());
-    let mut geom = WindowGeom::new(config.default_window_width, start_rect);
+    let mut geom = WindowGeom::new(width, start_rect);
     geom.is_floating = is_floating;
     geom.floating = floating_rect;
     geom.capture_sessions = pending.capture_sessions;

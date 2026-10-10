@@ -314,8 +314,11 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
             if let Some(window) = state.wm.focused_window_mut() {
                 window.geom.is_floating = !window.geom.is_floating;
                 if window.geom.is_floating {
-                    window.geom.floating =
-                        crate::layout::common::center_rectangle(non_exclusive, &config);
+                    window.geom.floating = crate::layout::common::center_rectangle(
+                        non_exclusive,
+                        &config,
+                        config.default_window_width,
+                    );
                     // Don't snap current to floating; layout.update sets
                     // finish so the change is committed in one pass.
                 }

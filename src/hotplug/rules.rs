@@ -13,6 +13,7 @@ fn rule(app_id: Option<&str>, title: Option<&str>, floating: bool) -> WindowRule
         app_id: app_id.map(Into::into),
         title: title.map(Into::into),
         floating,
+        ..WindowRule::default()
     }
 }
 
@@ -105,6 +106,80 @@ fn a_late_app_id_does_not_apply_the_rule() {
     send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
     s.manage(&mut sv);
     assert!(!only_window(&s).geom.is_floating);
+}
+
+/// A rule can pin a window to a workspace number (1-based, as in
+/// `focus_workspace_number`) instead of the focused one.
+#[test]
+fn a_rule_opens_the_window_on_its_workspace() {
+    let mut pinning = rule(Some("foot"), None, false);
+    pinning.open_on_workspace = Some(3);
+    let (mut s, mut sv) = scene(vec![pinning]);
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let workspaces = &s.state.wm.outputs[0].workspace_list;
+    assert_eq!(workspaces[0].window_list.len(), 0, "not on the focused one");
+    assert_eq!(workspaces[2].window_list.len(), 1, "on workspace 3");
+}
+
+/// A rule can pin a window to a named output. Output B is added first so the
+/// focused one is A; the window lands on B without being focused, like niri.
+#[test]
+fn a_rule_opens_the_window_on_its_output() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "B", (1920, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    assert_eq!(s.state.wm.focused_output_idx, Some(1), "A is focused");
+
+    let mut pinning = rule(Some("foot"), None, false);
+    pinning.open_on_output = Some("B".into());
+    s.config_mut().window_rules = vec![pinning];
+
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    assert_eq!(s.state.wm.outputs[0].workspace_list[0].window_list.len(), 1);
+    assert_eq!(s.state.wm.outputs[1].workspace_list[0].window_list.len(), 0);
+}
+
+/// An output name that is not attached falls back to the focused output.
+#[test]
+fn an_unknown_output_falls_back_to_the_focused_one() {
+    let mut pinning = rule(Some("foot"), None, false);
+    pinning.open_on_output = Some("HDMI-A-1".into());
+    let (mut s, mut sv) = scene(vec![pinning]);
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    assert_eq!(s.state.wm.outputs[0].workspace_list[0].window_list.len(), 1);
+}
+
+/// A rule can set the width of the new window: the tiled proportion and the
+/// floating rest rect are both derived from it.
+#[test]
+fn a_rule_sets_the_window_width() {
+    let mut wide = rule(Some("foot"), None, true);
+    wide.default_window_width = Some(0.25);
+    let (mut s, mut sv) = scene(vec![wide]);
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let window = only_window(&s);
+    assert_eq!(window.geom.proportion, 0.25);
+    assert_eq!(window.geom.floating.width, 468); // trunc(1911 * 0.25) - 9
 }
 
 /// A title change after the window is mapped does not re-evaluate rules

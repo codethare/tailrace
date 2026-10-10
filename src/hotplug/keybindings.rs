@@ -257,3 +257,49 @@ fn floating_actions_move_and_resize_the_rest_rect() {
     assert!(geom(&s).floating.height > 0);
     s.check_consistent();
 }
+
+/// `center_focused_window = "on_overflow"` compares against the focus of the
+/// previous layout pass; the unit test in `scroller` only proves the
+/// comparison itself. Two 0.5 windows fit on a 1920px output, so focusing to
+/// one of them must not center; widening the other to 1.0 makes the pair
+/// overflow, so focusing away from it must.
+#[test]
+fn on_overflow_centers_only_a_window_that_does_not_fit() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.config_mut().center_focused_window = crate::types::CenterFocused::OnOverflow;
+
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    let rect = |s: &Session, idx: usize| {
+        let geom = &s.state.wm.outputs[0].workspace_list[0].window_list[idx].geom;
+        geom.current
+    };
+    let centered_x = |s: &Session, idx: usize| (1920 - rect(s, idx).width) / 2;
+
+    // 0.5 + 0.5 fits: moving the focus left must not center.
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowLeft);
+    s.manage(&mut sv);
+    assert_ne!(rect(&s, 0).x, centered_x(&s, 0), "the pair fits");
+
+    // Widen the focused (left) window to 1.0, then focus right again: the pair
+    // no longer fits, so the newly focused window is centered.
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::SetWindowWidth(1.0));
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowRight);
+    s.manage(&mut sv);
+    assert_eq!(rect(&s, 1).x, centered_x(&s, 1), "the pair overflows");
+
+    // A later pass that does not move the focus must leave it there: the
+    // decision is latched, not re-taken.
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::OverviewCancel);
+    s.manage(&mut sv);
+    assert_eq!(rect(&s, 1).x, centered_x(&s, 1), "still centered");
+    s.check_consistent();
+}

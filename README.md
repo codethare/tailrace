@@ -24,7 +24,7 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 * Live-reloading TOML config
 * Multi-output with window migration (windows return to their output when it reappears)
 * TTY switch resilience — workspaces survive output removal (laptop panel off, lock)
-* Window rules by exact `app_id` / glob `title` (force floating)
+* Window rules by exact `app_id` / glob `title`: float, open on a given workspace or output, or open at a given width
 * Focus follows the mouse pointer (opt-in, sloppy focus)
 * Session-lock focus save/restore
 
@@ -50,7 +50,8 @@ River `main`; the v0.4.8 release only provides v5). tailrace also binds
 `river_xkb_bindings_v1` v3.
 
 tailrace itself takes `-c/--config <path>` to read a specific config file,
-`--help` and `--version`.
+`--check-config` to parse the config, report any error and exit without
+starting, `--help` and `--version`.
 
 ## Configuration
 
@@ -69,7 +70,8 @@ default key table below.
 Unknown keys are rejected at parse time: a typo is reported rather than
 silently ignored.
 
-`Super+r` reloads the config; on parse errors the current config is kept.
+`Super+r` reloads the config; on parse errors the current config is kept and
+the error is printed.
 
 ### Top-level options
 
@@ -78,14 +80,21 @@ silently ignored.
 | `vertical_gap` | `9` | Gap between windows and the output's top/bottom edge |
 | `horizontal_gap` | `9` | Gap between adjacent windows |
 | `default_window_width` | `0.5` | Starting width of a new window, as a proportion of the output |
-| `center_focused_window` | `"never"` | Center the focused window: `never`, `always`, `single` |
+| `center_focused_window` | `"never"` | Center the focused window: `never`, `always`, `single`, `on_overflow` (when it does not fit next to the window the focus came from) |
 | `focus_follows_pointer` | `false` | Keyboard focus follows the mouse pointer (sloppy focus) |
 | `no_csd` | `true` | Disable client side decorations |
 | `border.width` | `3` | Border width in pixels |
 | `border.focused_color`, `border.unfocused_color` | | `{ r, g, b, a }` with 0–255 channels and 0.0–1.0 alpha |
 | `cursor.theme`, `cursor.size` | | XCursor theme and size (omit for the default cursor) |
 | `spawn_at_startup` | `[]` | Commands spawned detached at startup |
-| `window_rules` | `[]` | Match by `app_id` and/or glob `title`; matched windows float |
+| `window_rules` | `[]` | Match by `app_id` and/or glob `title`; matched windows float, open on a workspace or output, or open at a width |
+
+Rule fields: `floating`, `open_on_workspace` (1-10, as in
+`focus_workspace_number`), `open_on_output` (a river output name such as
+`HDMI-A-1`; one that is not attached falls back to the focused output) and
+`default_window_width` (a proportion of the output, as at the top level). For
+each field the first matching rule that sets it wins; `floating` is an any-match.
+A value outside 1-10 for `open_on_workspace` is a parse error.
 
 Rules are evaluated when a window is first mapped, so `Super+r` does not
 re-evaluate them for already-open windows (matching rill-ed) — a window you

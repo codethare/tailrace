@@ -64,9 +64,23 @@ pub fn update(wm: &mut WindowManager) {
                 .iter()
                 .map(|w| w.geom.clone())
                 .collect();
+            // on-overflow is latched: only a move of the focus retakes the
+            // decision, so an unrelated pass (a new window, an output event, a
+            // config reload) cannot un-center the window afterwards.
+            if workspace.focused_window_idx != workspace.previous_focused_window_idx {
+                workspace.on_overflow_center = scroller::overflows(
+                    &geoms,
+                    workspace.focused_window_idx,
+                    workspace.previous_focused_window_idx,
+                    output.non_exclusive,
+                    &config,
+                );
+                workspace.previous_focused_window_idx = workspace.focused_window_idx;
+            }
             scroller::apply(
                 &mut geoms,
                 workspace.focused_window_idx,
+                workspace.on_overflow_center,
                 output.rectangle,
                 output.non_exclusive,
                 &config,

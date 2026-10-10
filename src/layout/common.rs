@@ -29,9 +29,9 @@ pub fn initial_rectangle(non_exclusive: Rectangle, config: &Config) -> Rectangle
 }
 
 /// Centered floating rectangle; 16:9 height derives from the width proportion.
-pub fn center_rectangle(non_exclusive: Rectangle, config: &Config) -> Rectangle {
+pub fn center_rectangle(non_exclusive: Rectangle, config: &Config, width: f32) -> Rectangle {
     let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
-    let width_with_gap = (base_width * config.default_window_width) as i32;
+    let width_with_gap = (base_width * width) as i32;
     let w = width_with_gap - config.horizontal_gap;
     let h = w * 9 / 16;
     Rectangle {
@@ -368,7 +368,8 @@ mod tests {
 
     #[test]
     fn center_rectangle_is_centered_and_16_9() {
-        let rect = center_rectangle(OUTPUT, &config(0.5, CenterFocused::Never));
+        let c = config(0.5, CenterFocused::Never);
+        let rect = center_rectangle(OUTPUT, &c, c.default_window_width);
 
         // 16:9 within integer truncation.
         assert!((rect.width * 9 - rect.height * 16).abs() <= 15);

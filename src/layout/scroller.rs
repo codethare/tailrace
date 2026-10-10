@@ -13,6 +13,7 @@ use crate::types::{CenterFocused, Config, Rectangle, WindowGeom};
 pub fn apply(
     windows: &mut [WindowGeom],
     focused_window_idx: Option<usize>,
+    on_overflow_center: bool,
     output_rect: Rectangle,
     non_exclusive: Rectangle,
     config: &Config,
@@ -49,6 +50,7 @@ pub fn apply(
         CenterFocused::Never => false,
         CenterFocused::Always => true,
         CenterFocused::Single => tiled_count == 1,
+        CenterFocused::OnOverflow => on_overflow_center,
     };
 
     let mut rectangle;
@@ -156,6 +158,47 @@ pub fn apply(
     for window in windows.iter_mut() {
         common::skip_if_at_rest(window);
     }
+}
+
+/// niri's `on-overflow` test: do the focused window and the window the focus
+/// came from *not* fit on the output together? niri takes the neighbour of the
+/// focused window toward the previous one, so the two can be several columns
+/// apart. Floating windows take no space in the strip and are skipped the same
+/// way the layout skips them.
+pub fn overflows(
+    windows: &[WindowGeom],
+    focused_idx: Option<usize>,
+    previous_idx: Option<usize>,
+    non_exclusive: Rectangle,
+    config: &Config,
+) -> bool {
+    // First pass for this workspace, or the focus never moved: niri fits.
+    let (Some(focused_idx), Some(previous_idx)) = (focused_idx, previous_idx) else {
+        return false;
+    };
+    if previous_idx == focused_idx || focused_idx >= windows.len() {
+        return false;
+    }
+
+    let step: isize = if previous_idx > focused_idx { 1 } else { -1 };
+    let mut idx = focused_idx as isize + step;
+    let neighbour = loop {
+        if idx < 0 || idx as usize >= windows.len() {
+            return false;
+        }
+        let window = &windows[idx as usize];
+        if !window.is_floating {
+            break window;
+        }
+        idx += step;
+    };
+
+    // Each width is computed with a gap folded in, so the pair plus the gaps
+    // around and between them come to a single `horizontal_gap`.
+    let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
+    let neighbour_width = (base_width * neighbour.proportion) as i32;
+    let focused_width = (base_width * windows[focused_idx].proportion) as i32;
+    neighbour_width + focused_width + config.horizontal_gap > non_exclusive.width
 }
 
 fn focused_window_layout(
@@ -273,7 +316,7 @@ mod tests {
     };
 
     fn apply(windows: &mut [WindowGeom], focused: Option<usize>, config: &Config) {
-        super::apply(windows, focused, OUTPUT, NON_EXCLUSIVE, config, 0);
+        super::apply(windows, focused, false, OUTPUT, NON_EXCLUSIVE, config, 0);
     }
 
     /// Mirrors the coordinator's snap: settle windows at their finish.
@@ -382,6 +425,91 @@ mod tests {
         // Finish is the on-screen rightmost slot, not the off-screen start.
         assert!(finish.x < NON_EXCLUSIVE.x + NON_EXCLUSIVE.width);
         assert!(finish.x >= NON_EXCLUSIVE.x);
+    }
+
+    /// niri's `on-overflow`: center only when the newly focused window does
+    /// not fit next to the one the focus came from. Two 0.5 windows exactly
+    /// fill a 1920px output (three 9px gaps), so that pair must not overflow;
+    /// 0.6 + 0.5 must. The comparison is taken toward the previous window, and
+    /// floats do not take up space in the strip.
+    #[test]
+    fn overflows_only_when_the_pair_does_not_fit() {
+        let config = Config::default();
+        let pair = |a: f32, b: f32| vec![tiled(a), tiled(b)];
+
+        // 0.5 + 0.5 fits exactly: 955 + 955 + 9 == 1919 <= 1920.
+        let windows = pair(0.5, 0.5);
+        assert!(!overflows(
+            &windows,
+            Some(1),
+            Some(0),
+            NON_EXCLUSIVE,
+            &config
+        ));
+        assert!(!overflows(
+            &windows,
+            Some(0),
+            Some(1),
+            NON_EXCLUSIVE,
+            &config
+        ));
+
+        let windows = pair(0.6, 0.5);
+        assert!(overflows(
+            &windows,
+            Some(1),
+            Some(0),
+            NON_EXCLUSIVE,
+            &config
+        ));
+        assert!(overflows(
+            &windows,
+            Some(0),
+            Some(1),
+            NON_EXCLUSIVE,
+            &config
+        ));
+
+        // No previous focus, or none at all, never centers.
+        let windows = pair(1.0, 1.0);
+        assert!(!overflows(&windows, Some(1), None, NON_EXCLUSIVE, &config));
+        assert!(!overflows(&windows, None, None, NON_EXCLUSIVE, &config));
+        assert!(!overflows(
+            &windows,
+            Some(0),
+            Some(0),
+            NON_EXCLUSIVE,
+            &config
+        ));
+
+        // The neighbour toward the previous window is the one that counts:
+        // 0.4 + 0.5 fits, 0.6 + 0.5 does not.
+        let windows = vec![tiled(0.4), tiled(0.5), tiled(0.6)];
+        assert!(!overflows(
+            &windows,
+            Some(1),
+            Some(0),
+            NON_EXCLUSIVE,
+            &config
+        ));
+        assert!(overflows(
+            &windows,
+            Some(1),
+            Some(2),
+            NON_EXCLUSIVE,
+            &config
+        ));
+
+        // A float in between is skipped: 0.5 + 0.5 either side of it.
+        let mut windows = vec![tiled(0.5), tiled(0.5), tiled(0.5)];
+        windows[1].is_floating = true;
+        assert!(!overflows(
+            &windows,
+            Some(2),
+            Some(0),
+            NON_EXCLUSIVE,
+            &config
+        ));
     }
 
     #[test]

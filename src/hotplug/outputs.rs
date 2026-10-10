@@ -184,7 +184,11 @@ fn hdmi_2k_unplug_restores_small_laptop_screen() {
             .last_mut()
             .unwrap();
         window.geom.is_floating = true;
-        window.geom.floating = crate::layout::common::center_rectangle(rect, &wm.config);
+        window.geom.floating = crate::layout::common::center_rectangle(
+            rect,
+            &wm.config,
+            wm.config.default_window_width,
+        );
     }
     s.manage(&mut sv);
     s.check_consistent();

@@ -116,6 +116,12 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   binding setup sets `needs_setup_bindings` instead of `status`, because any
   output or window event in the same batch would clobber the status and the
   bindings would never be created.
+- **`on_overflow` is latched, not recomputed.** `layout::update` retakes the
+  centering decision only when `focused_window_idx` moves, keeping the result
+  in `Workspace::on_overflow_center` and the window it came from in
+  `previous_focused_window_idx`. Re-deciding on a later pass (an added window,
+  an output event, a no-op action) reads "no previous focus" and drags the
+  window back out of center.
 - **rill-ed is the reference implementation.** When behaviour looks wrong,
   compare with `src/` in rill-ed (`animation.zig` ↔ `snap_to_finish`,
   `layout.zig` ↔ `layout/`); two bugs in tailrace were single dropped lines from

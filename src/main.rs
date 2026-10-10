@@ -29,17 +29,19 @@ use crate::wm::WindowManager;
 const USAGE: &str = "\
 tailrace - tiny scrolling window manager for river
 
-usage: tailrace [-c <path>]
+usage: tailrace [-c <path>] [--check-config]
 
 options:
   -c, --config <path>  read this file instead of searching
                        $XDG_CONFIG_HOME/tailrace/config.toml and ~/.config/tailrace/config.toml
+  --check-config       parse the config, report errors and exit
   -h, --help           print this help and exit
   -V, --version        print the version and exit
 ";
 
 struct Args {
     config: Option<std::path::PathBuf>,
+    check_config: bool,
 }
 
 /// Prints help/version and returns None when the process should exit early.
@@ -49,6 +51,7 @@ fn parse_args() -> Result<Option<Args>, String> {
 
 fn parse_args_from<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Args>, String> {
     let mut config = None;
+    let mut check_config = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-c" | "--config" => {
@@ -57,6 +60,7 @@ fn parse_args_from<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Arg
                 };
                 config = Some(std::path::PathBuf::from(path));
             }
+            "--check-config" => check_config = true,
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(None);
@@ -68,7 +72,10 @@ fn parse_args_from<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Arg
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
-    Ok(Some(Args { config }))
+    Ok(Some(Args {
+        config,
+        check_config,
+    }))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -80,6 +87,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
     };
+    // Loaded before the Wayland connection so `--check-config` works without
+    // a compositor. Config errors are reported through `Display` (the toml
+    // error names the line), not as a nested io::Error Debug.
+    let config = match config::load(args.config.as_deref()) {
+        Ok(config) => config,
+        Err(e) if args.check_config => {
+            eprintln!("tailrace: {e}");
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if args.check_config {
+        println!("tailrace: config ok");
+        return Ok(());
+    }
     // Auto-reap children without breaking waitpid() in spawned programs.
     // SA_NOCLDWAIT alone prevents zombies while preserving waitpid()
     // semantics for children that use fork()+waitpid() internally
@@ -106,8 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_queue = conn.new_event_queue();
     let qh: QueueHandle<AppData> = event_queue.handle();
     let registry = display.get_registry(&qh, ());
-
-    let config = config::load(args.config.as_deref())?;
 
     let mut state = AppData {
         registry,
@@ -183,6 +203,13 @@ mod tests {
     #[test]
     fn help_and_version_exit_early() {
         assert!(args(&["--help"]).unwrap().is_none());
+        assert!(args(&["-V"]).unwrap().is_none());
+    }
+
+    #[test]
+    fn check_config_flag_is_parsed() {
+        assert!(args(&["--check-config"]).unwrap().unwrap().check_config);
+        assert!(!args(&[]).unwrap().unwrap().check_config);
         assert!(args(&["-V"]).unwrap().is_none());
     }
 

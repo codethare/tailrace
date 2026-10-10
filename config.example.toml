@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Julian Andrews
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Gap between windows and the output's top/bottom edge
 vertical_gap = 9
 # Gap between adjacent windows
@@ -5,7 +8,7 @@ horizontal_gap = 9
 # Default proportion of the output's available width for a new window
 default_window_width = 0.5
 
-# Center the focused window (never, always, single)
+# Center the focused window (never, always, single, on_overflow)
 center_focused_window = "never"
 
 # Focus the window under the mouse pointer (sloppy focus)
@@ -28,15 +31,24 @@ unfocused_color = { r = 160, g = 160, b = 160, a = 1.0 }
 # spawn_at_startup = [["awww-daemon"], ["wl-clip-persist", "--clipboard", "both"]]
 
 # Rules matching windows by exact app_id and/or glob title (`*`, `?`).
-# All set fields must match. Matched windows are forced floating.
-# Evaluated when a window is first mapped: reloading the config does not
-# re-evaluate rules for windows that are already open.
+# All set fields must match. Matched windows can be floated, opened on a given
+# workspace number (1-10) or output name, and opened at a given width. For each
+# of those the first matching rule that sets it wins. Evaluated when a window
+# is first mapped: reloading the config does not re-evaluate rules for windows
+# that are already open.
 # [[window_rules]]
 # app_id = "footclient"
 # floating = true
 # [[window_rules]]
 # title = "Picture-in-Picture"
 # floating = true
+# [[window_rules]]
+# app_id = "mpv"
+# open_on_workspace = 9
+# default_window_width = 0.5
+# [[window_rules]]
+# app_id = "firefox"
+# open_on_output = "HDMI-A-1"
 
 # Keybindings. A present [[keybindings]] section REPLACES the built-in
 # defaults as a whole - it does not merge - so either list every binding you

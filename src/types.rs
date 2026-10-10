@@ -117,6 +117,14 @@ pub struct Window {
 pub struct Workspace {
     pub window_list: Vec<Window>,
     pub focused_window_idx: Option<usize>,
+    /// Focus as of the previous layout pass. `center_focused_window =
+    /// "on_overflow"` needs to know which window the focus came from, and only
+    /// `layout::update` maintains this.
+    pub previous_focused_window_idx: Option<usize>,
+    /// The `on_overflow` decision taken when the focus last moved. Reused while
+    /// the focus stays put, so an unrelated layout pass cannot un-center the
+    /// window.
+    pub on_overflow_center: bool,
 }
 
 impl Workspace {
@@ -124,6 +132,8 @@ impl Workspace {
         Workspace {
             window_list: Vec::new(),
             focused_window_idx: None,
+            previous_focused_window_idx: None,
+            on_overflow_center: false,
         }
     }
 
@@ -208,6 +218,10 @@ pub enum CenterFocused {
     Never,
     Always,
     Single,
+    /// Center only when the focused window does not fit next to the window it
+    /// was focused from (niri's `on-overflow`).
+    #[serde(rename = "on_overflow")]
+    OnOverflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -236,12 +250,21 @@ pub struct Cursor {
 
 /// Rule matching windows by exact app_id and glob title. All set fields must
 /// match. Title supports `*` (any run, including empty) and `?` (single char).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+///
+/// The remaining fields are applied to matching windows when they are mapped;
+/// for each of them the first matching rule that sets it wins.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowRule {
     pub app_id: Option<String>,
     pub title: Option<String>,
     pub floating: bool,
+    /// Workspace number (1-10, as in `focus_workspace_number`) to open on.
+    pub open_on_workspace: Option<usize>,
+    /// river output name (e.g. "HDMI-A-1") to open on.
+    pub open_on_output: Option<String>,
+    /// Proportion of the output width, overriding `default_window_width`.
+    pub default_window_width: Option<f32>,
 }
 
 impl WindowRule {
@@ -390,6 +413,7 @@ mod tests {
             app_id: Some("footclient".into()),
             title: None,
             floating: true,
+            ..WindowRule::default()
         };
         assert!(r.matches(Some("footclient"), None));
         assert!(!r.matches(Some("foot"), None));
@@ -399,6 +423,7 @@ mod tests {
             app_id: Some("a".into()),
             title: Some("t".into()),
             floating: false,
+            ..WindowRule::default()
         };
         assert!(both.matches(Some("a"), Some("t")));
         assert!(!both.matches(Some("a"), Some("x")));
@@ -410,6 +435,7 @@ mod tests {
             app_id: None,
             title: Some("file-*".into()),
             floating: false,
+            ..WindowRule::default()
         };
         assert!(glob.matches(None, Some("file-a.txt")));
         assert!(glob.matches(None, Some("file-")));
@@ -419,6 +445,7 @@ mod tests {
             app_id: None,
             title: Some("file-?.txt".into()),
             floating: false,
+            ..WindowRule::default()
         };
         assert!(q.matches(None, Some("file-a.txt")));
         assert!(!q.matches(None, Some("file-ab.txt")));
@@ -427,6 +454,7 @@ mod tests {
             app_id: None,
             title: Some("*".into()),
             floating: false,
+            ..WindowRule::default()
         };
         assert!(star_only.matches(None, Some("")));
         assert!(star_only.matches(None, Some("anything")));
@@ -435,6 +463,7 @@ mod tests {
             app_id: None,
             title: Some("a*b".into()),
             floating: false,
+            ..WindowRule::default()
         };
         assert!(backtrack.matches(None, Some("aXbYb")));
         assert!(!backtrack.matches(None, Some("aXbY")));
