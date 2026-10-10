@@ -509,7 +509,7 @@ pub fn op_action(wm: &mut crate::wm::WindowManager) {
         }
     };
 
-    river_window.set_content_clip_box(0, 0, 0, 0);
+    river_window.set_clip_box(0, 0, 0, 0);
     // The op disabled clipping; forget the cache so the next layout pass
     // restores the box even when it is unchanged.
     geom.sent_clip = None;

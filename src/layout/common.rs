@@ -247,13 +247,14 @@ pub fn place_window(
         geom.sent_visible = Some(visible);
     }
 
-    // Content clip box (the x/y are in node coordinates, hence the border
-    // inset in compute_clip_box): river then draws the borders around the
-    // visible content, so a window scrolled half off the output keeps them at
-    // the edge instead of having them clipped away.
+    // Clips content *and* borders (the x/y are in node coordinates, hence the
+    // border inset in compute_clip_box). Not set_content_clip_box: river sizes
+    // the border frame from the content-clip intersection but positions it
+    // from the node origin, so a clip cutting the left (or top) edge draws the
+    // frame shifted into the window instead of around the visible part.
     let clip = compute_clip_box(geom.current, output_rect, border_width as u8);
     if geom.sent_clip.is_none_or(|sent| !sent.eql(clip)) {
-        river_window.set_content_clip_box(clip.x, clip.y, clip.width, clip.height);
+        river_window.set_clip_box(clip.x, clip.y, clip.width, clip.height);
         geom.sent_clip = Some(clip);
     }
 }

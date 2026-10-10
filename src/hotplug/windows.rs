@@ -55,8 +55,8 @@ fn fullscreen_window_sends_no_border_and_zero_origin_clip() {
                 "fullscreen window must not set a border, got {args}"
             );
         }
-        if op == REQ_WIN_SET_CONTENT_CLIP_BOX {
-            // set_content_clip_box(x, y, w, h)
+        if op == REQ_WIN_SET_CLIP_BOX {
+            // set_clip_box(x, y, w, h)
             let v: Vec<i32> = args
                 .split(',')
                 .map(|a| a.trim_start_matches('i').parse().unwrap())
@@ -534,14 +534,11 @@ fn the_focused_float_stacks_above_the_other_floats() {
     );
 }
 
-/// Regression: river draws the compositor borders around the intersection of
-/// the window *content* (the slot minus the border inset) and the content clip
-/// box, disables the content when that intersection is empty, and in that case
-/// also leaves the border frame it computed last on screen. tailrace used to
-/// decide visibility from the whole slot, so a window peeking out by less than
-/// its border width was left shown: its content went away and the stale frame
-/// stayed behind as a border outline with no window in it ("a border line like
-/// the first window detached"). Such a window has to be hidden instead.
+/// Regression: tailrace used to decide visibility from the whole slot, so a
+/// window peeking out of the output by less than its border width was left
+/// shown with only its border band on screen and no content under it ("a
+/// border line like the first window detached"). Visibility is decided on the
+/// content rect instead, so such a window is hidden.
 #[test]
 fn window_showing_only_its_border_band_is_hidden() {
     let (mut s, mut sv) = build();
@@ -581,4 +578,74 @@ fn window_showing_only_its_border_band_is_hidden() {
         !log.iter().any(|(_, op, _)| *op == REQ_WIN_SHOW),
         "it must not be shown again while only its border band is on screen"
     );
+}
+
+/// Regression: river builds the compositor border frame from the *size* of the
+/// content-clip intersection but positions it from the node origin. A clip box
+/// with a non-zero x/y (a window scrolled off the left edge) therefore draws
+/// the frame shifted into the window. With an uneven split, focusing the
+/// second window clamps it to the right edge and pushes the first one off the
+/// left, so its border used to be drawn offset from its content. The clip has
+/// to go through set_clip_box, which river intersects with the border boxes.
+#[test]
+fn scrolled_window_clips_with_set_clip_box_not_content_clip() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let w0 = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    let w1 = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    // 6:5 does not fit on the output: focusing window 1 clamps it to the right
+    // edge and scrolls window 0 off the left.
+    {
+        let ws = &mut s.state.wm.outputs[0].workspace_list[0];
+        ws.window_list[0].geom.proportion = 0.6;
+        ws.window_list[1].geom.proportion = 0.5;
+        ws.focused_window_idx = Some(0);
+        ws.previous_focused_window_idx = None;
+    }
+    crate::layout::update(&mut s.state.wm);
+    s.state.wm.status = crate::types::Status::Layout;
+    s.manage(&mut sv);
+
+    s.state.wm.outputs[0].workspace_list[0].focused_window_idx = Some(1);
+    crate::layout::update(&mut s.state.wm);
+    s.state.wm.status = crate::types::Status::Layout;
+    sv.clear_request_log();
+    s.manage(&mut sv);
+
+    let geom = &s.state.wm.outputs[0].workspace_list[0].window_list[0].geom;
+    assert!(
+        geom.current.x < 0,
+        "test setup must scroll window 0 off the left: {:?}",
+        geom.current
+    );
+
+    let clips: Vec<String> = sv
+        .requests_for(&w0)
+        .into_iter()
+        .filter(|(_, op, _)| *op == REQ_WIN_SET_CLIP_BOX)
+        .map(|(_, _, args)| args)
+        .collect();
+    assert_eq!(
+        clips,
+        vec![format!(
+            "i{},i-3,i{},i{}",
+            -geom.current.x - 3,
+            geom.current.x + geom.current.width,
+            geom.current.height
+        )],
+        "the scrolled window must be clipped with a left-edge inset"
+    );
+    for window in [&w0, &w1] {
+        assert_eq!(
+            count_requests(&sv, window, REQ_WIN_SET_CONTENT_CLIP_BOX),
+            0,
+            "set_content_clip_box would offset the border frame"
+        );
+    }
 }

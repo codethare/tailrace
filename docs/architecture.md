@@ -55,7 +55,7 @@ with `render_finish`.
    requests through `layout::common::place_window`: `propose_dimensions` with
    `set_dimension_bounds` (skipped while `geom.capture_sessions > 0`, so a
    screencast does not rescale), `set_position`, `show`/`hide` and
-   `set_content_clip_box`, each deduplicated against the `sent_*` caches on
+   `set_clip_box`, each deduplicated against the `sent_*` caches on
    `WindowGeom`. `raise_floating_windows` then raises every float above the
    tiles, the focused float last, using `place_above` for all but the first.
 
@@ -127,13 +127,17 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   `layout.zig` ↔ `layout/`); two bugs in tailrace were single dropped lines from
   it, and one deliberate divergence (fullscreen floats) is documented in the
   code.
-- **Show/hide is decided on the content rect, not the slot.** river draws its
-  borders around the intersection of the window content (the slot minus the
-  border inset) and the content clip box, and when that intersection is empty
-  it turns the content off but keeps the border frame from the previous frame
-  on screen. A slot peeking out by less than the border width must therefore
-  be hidden, or it renders as a border outline with no window in it
+- **Show/hide is decided on the content rect, not the slot.** River clips the
+  window and its borders to the clip box, so a slot that peeks out by less
+  than the border width still renders its border band at the output edge with
+  no content under it ("a border line like the first window detached"). A
+  window whose content is entirely off the output must therefore be hidden
   (`layout/common.rs::place_window`).
+- **Clip with `set_clip_box`, not `set_content_clip_box`.** River sizes the
+  compositor border frame from the content-clip intersection but positions it
+  from the node origin, so a content clip that cuts the left or top edge draws
+  the frame shifted into the window. `set_clip_box` clips the border boxes
+  themselves instead, which stays aligned.
 - **Protocol updates** are a `protocol/update.sh <ref>` plus a bind version
   bump in `app.rs`; see `protocol/README.md` for the current revision and what
   is still unused.
