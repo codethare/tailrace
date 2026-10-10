@@ -77,9 +77,11 @@ const EVT_WIN_EXIT_FULLSCREEN_REQUESTED: u16 = 13;
 const EVT_WIN_CAPTURE_SESSIONS: u16 = 18;
 const EVT_WIN_TOUCH_MOVE_REQUESTED: u16 = 19;
 const EVT_WIN_TOUCH_RESIZE_REQUESTED: u16 = 20;
-// river_window_v1 requests (propose_dimensions=3, …, set_capabilities=14,
-// … set_content_clip_box=22, set_dimension_bounds=23)
+// river_window_v1 requests (propose_dimensions=3, hide=4, show=5,
+// set_capabilities=14, … set_content_clip_box=22, set_dimension_bounds=23)
 const REQ_WIN_PROPOSE_DIMENSIONS: u16 = 3;
+const REQ_WIN_HIDE: u16 = 4;
+const REQ_WIN_SHOW: u16 = 5;
 const REQ_WIN_SET_CAPABILITIES: u16 = 14;
 const REQ_WIN_SET_CONTENT_CLIP_BOX: u16 = 22;
 const REQ_WIN_SET_DIMENSION_BOUNDS: u16 = 23;

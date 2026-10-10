@@ -533,3 +533,52 @@ fn the_focused_float_stacks_above_the_other_floats() {
         "it must be placed above the other float: {last:?}"
     );
 }
+
+/// Regression: river draws the compositor borders around the intersection of
+/// the window *content* (the slot minus the border inset) and the content clip
+/// box, disables the content when that intersection is empty, and in that case
+/// also leaves the border frame it computed last on screen. tailrace used to
+/// decide visibility from the whole slot, so a window peeking out by less than
+/// its border width was left shown: its content went away and the stale frame
+/// stayed behind as a border outline with no window in it ("a border line like
+/// the first window detached"). Such a window has to be hidden instead.
+#[test]
+fn window_showing_only_its_border_band_is_hidden() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+
+    // A maximized window (focused while it is the only one) plus two half-width
+    // ones.
+    let w0 = s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::SetWindowWidth(1.0),
+    );
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    sv.clear_request_log();
+    s.add_window(&mut sv); // focus lands on the new last window
+    s.manage(&mut sv);
+
+    // The strip is … | -1901..1 | 10..956 | 965..1911 |: window 0 still
+    // overlaps the output by one pixel, all of it border band (3px), so none
+    // of its content is on screen.
+    let geom = &s.state.wm.outputs[0].workspace_list[0].window_list[0].geom;
+    assert_eq!((geom.current.x, geom.current.width), (-1901, 1902));
+
+    let log = sv.requests_for(&w0);
+    assert!(
+        log.iter().any(|(_, op, _)| *op == REQ_WIN_HIDE),
+        "a window with no content on screen must be hidden, not left as a frame"
+    );
+    assert!(
+        !log.iter().any(|(_, op, _)| *op == REQ_WIN_SHOW),
+        "it must not be shown again while only its border band is on screen"
+    );
+}

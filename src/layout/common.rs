@@ -218,20 +218,26 @@ pub fn place_window(
         geom.sent_current = Some(geom.current);
     }
 
-    let window_left = geom.current.x;
-    let window_right = geom.current.x + geom.current.width;
-    let window_top = geom.current.y;
-    let window_bottom = geom.current.y + geom.current.height;
-
     let output_left = output_rect.x;
     let output_right = output_rect.x + output_rect.width;
     let output_top = output_rect.y;
     let output_bottom = output_rect.y + output_rect.height;
 
-    let visible = !(output_left >= window_right
-        || output_right <= window_left
-        || output_top >= window_bottom
-        || output_bottom <= window_top);
+    // Visibility is decided on the *content* rect, not the slot: river draws
+    // the borders around the intersection of the content and the clip box and
+    // disables the content when that intersection is empty, while still
+    // drawing the border frame it computed last. A slot showing only its
+    // border band (or less) therefore has to be hidden, or the window ends up
+    // as a border outline with no window in it.
+    let content_left = geom.current.x + border_width;
+    let content_top = geom.current.y + border_width;
+    let content_right = content_left + (geom.current.width - 2 * border_width).max(0);
+    let content_bottom = content_top + (geom.current.height - 2 * border_width).max(0);
+
+    let visible = !(output_left >= content_right
+        || output_right <= content_left
+        || output_top >= content_bottom
+        || output_bottom <= content_top);
     if geom.sent_visible != Some(visible) {
         if visible {
             river_window.show();

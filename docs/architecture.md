@@ -127,6 +127,13 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   `layout.zig` ↔ `layout/`); two bugs in tailrace were single dropped lines from
   it, and one deliberate divergence (fullscreen floats) is documented in the
   code.
+- **Show/hide is decided on the content rect, not the slot.** river draws its
+  borders around the intersection of the window content (the slot minus the
+  border inset) and the content clip box, and when that intersection is empty
+  it turns the content off but keeps the border frame from the previous frame
+  on screen. A slot peeking out by less than the border width must therefore
+  be hidden, or it renders as a border outline with no window in it
+  (`layout/common.rs::place_window`).
 - **Protocol updates** are a `protocol/update.sh <ref>` plus a bind version
   bump in `app.rs`; see `protocol/README.md` for the current revision and what
   is still unused.
