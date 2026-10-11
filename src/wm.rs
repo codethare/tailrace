@@ -169,6 +169,64 @@ impl WindowManager {
         ws.window_list = source_list;
         ws.focused_window_idx = source_focus;
     }
+
+    /// Sticky windows follow the focused workspace of their output. An
+    /// invariant, not a hook on each switch path: it is idempotent, and the
+    /// paths that change `focused_workspace_idx` stay unaware of stickiness.
+    pub fn pull_sticky_windows(&mut self) {
+        for output in self.outputs.iter_mut() {
+            if output.is_removed {
+                continue;
+            }
+            let target_idx = output.focused_workspace_idx;
+            // Taken out first: two &mut Workspace from the same [Workspace;
+            // 10] cannot coexist (see move_window_to_workspace).
+            let mut target_list =
+                std::mem::take(&mut output.workspace_list[target_idx].window_list);
+            // Where a sticky window that was focused before the switch lands
+            // in the target; only used when the target has no focus of its own,
+            // so a sticky window never steals it from a window already there.
+            let mut moved_focus = None;
+            for (workspace_idx, workspace) in output.workspace_list.iter_mut().enumerate() {
+                if workspace_idx == target_idx
+                    || !workspace.window_list.iter().any(|w| w.geom.is_sticky)
+                {
+                    continue;
+                }
+                let was_focused = workspace.focused_window_idx;
+                let mut kept = Vec::with_capacity(workspace.window_list.len());
+                for (window_idx, window) in std::mem::take(&mut workspace.window_list)
+                    .into_iter()
+                    .enumerate()
+                {
+                    if window.geom.is_sticky {
+                        if was_focused == Some(window_idx) {
+                            moved_focus = Some(target_list.len());
+                        }
+                        target_list.push(window);
+                    } else {
+                        kept.push(window);
+                    }
+                }
+                workspace.window_list = kept;
+                if workspace.window_list.is_empty() {
+                    workspace.focused_window_idx = None;
+                } else if workspace
+                    .focused_window_idx
+                    .is_none_or(|f| f >= workspace.window_list.len())
+                {
+                    // The focused window itself was pulled out: keep the index
+                    // at the same slot (or the last window).
+                    workspace.focused_window_idx = Some(workspace.window_list.len() - 1);
+                }
+            }
+            let target = &mut output.workspace_list[target_idx];
+            target.window_list = target_list;
+            if target.focused_window_idx.is_none() {
+                target.focused_window_idx = moved_focus;
+            }
+        }
+    }
 }
 
 /// Move `window_idx` from `source` to `target`, fixing up both focus indices.

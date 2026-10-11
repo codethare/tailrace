@@ -31,6 +31,7 @@ fn every_action() -> Vec<KeybindingAction> {
         A::MoveWindowLeftOrToOutputLeft,
         A::MoveWindowRightOrToOutputRight,
         A::ToggleWorkspaceFloating,
+        A::ToggleStickyWindow,
         A::FocusWorkspaceAbove,
         A::FocusWorkspaceBelow,
         A::FocusWorkspaceOrOutputAbove,
@@ -301,5 +302,147 @@ fn on_overflow_centers_only_a_window_that_does_not_fit() {
     crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::OverviewCancel);
     s.manage(&mut sv);
     assert_eq!(rect(&s, 1).x, centered_x(&s, 1), "still centered");
+    s.check_consistent();
+}
+
+/// Sticky windows follow the focused workspace of their output (i3/kwm
+/// style), so every switch path works without knowing about stickiness.
+#[test]
+fn sticky_window_follows_the_focused_workspace() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    fn ws(s: &Session, idx: usize) -> &crate::types::Workspace {
+        &s.state.wm.outputs[0].workspace_list[idx]
+    }
+
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::ToggleStickyWindow);
+    s.manage(&mut sv);
+    assert!(focused_window(&s).geom.is_sticky);
+
+    // The focused window is sticky: switching to the empty workspace 2 brings
+    // it along and keeps the focus on it.
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(2));
+    s.manage(&mut sv);
+    assert!(ws(&s, 0).window_list.is_empty(), "left workspace 1");
+    assert_eq!(ws(&s, 1).window_list.len(), 1, "arrived on workspace 2");
+    assert_eq!(ws(&s, 1).focused_window_idx, Some(0), "kept the focus");
+    s.check_consistent();
+
+    // Switching back to the now empty workspace 1 brings it home again.
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(1));
+    s.manage(&mut sv);
+    assert_eq!(ws(&s, 0).window_list.len(), 1, "returned to workspace 1");
+    assert_eq!(ws(&s, 0).focused_window_idx, Some(0), "kept the focus");
+    s.check_consistent();
+
+    // A non-sticky window on workspace 1 takes the focus; switching to the
+    // empty workspace 3 brings the sticky one along but leaves no focus there.
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(3));
+    s.manage(&mut sv);
+    assert_eq!(ws(&s, 2).window_list.len(), 1, "the sticky window followed");
+    assert_eq!(ws(&s, 2).focused_window_idx, None, "must not steal focus");
+    assert_eq!(ws(&s, 0).window_list.len(), 1, "the other window stayed");
+    s.check_consistent();
+}
+
+/// Un-sticking leaves the window where it is (i3 behavior): it only follows
+/// the focus while the mark is set.
+#[test]
+fn unsticking_leaves_the_window_in_place() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::ToggleStickyWindow);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(2));
+    s.manage(&mut sv);
+    assert_eq!(s.state.wm.outputs[0].workspace_list[1].window_list.len(), 1);
+
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::ToggleStickyWindow);
+    s.manage(&mut sv);
+    assert!(!focused_window(&s).geom.is_sticky);
+
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(3));
+    s.manage(&mut sv);
+    assert_eq!(
+        s.state.wm.outputs[0].workspace_list[1].window_list.len(),
+        1,
+        "the unmarked window stays on workspace 2"
+    );
+    assert!(
+        s.state.wm.outputs[0].workspace_list[2]
+            .window_list
+            .is_empty()
+    );
+    s.check_consistent();
+}
+
+/// Two sticky windows on workspace 1 plus a non-sticky one that holds the
+/// focus; switching to the empty workspace 2 pulls the two sticky windows over
+/// without moving the focus with them. That leaves a workspace with windows
+/// and no focused window — the state the direction keys must still handle.
+fn no_focus_workspace() -> (Session, MiniServer) {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    for _ in 0..3 {
+        s.add_window(&mut sv);
+        s.manage(&mut sv);
+    }
+    // The first two are sticky, the third keeps the focus.
+    for idx in 0..2 {
+        s.state.wm.outputs[0].workspace_list[0].focused_window_idx = Some(idx);
+        crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::ToggleStickyWindow);
+        s.manage(&mut sv);
+    }
+    s.state.wm.outputs[0].workspace_list[0].focused_window_idx = Some(2);
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWorkspaceNumber(2));
+    s.manage(&mut sv);
+
+    assert_eq!(s.state.wm.outputs[0].workspace_list[1].window_list.len(), 2);
+    assert_eq!(
+        s.state.wm.outputs[0].workspace_list[1].focused_window_idx, None,
+        "test setup must leave the workspace with no focus"
+    );
+    (s, sv)
+}
+
+/// A workspace with windows but no focus must be reachable from the keyboard:
+/// each direction key enters the strip from the end it points at.
+#[test]
+fn direction_keys_enter_a_workspace_with_no_focus() {
+    let focus = |s: &Session| s.state.wm.outputs[0].workspace_list[1].focused_window_idx;
+
+    let (mut s, mut sv) = no_focus_workspace();
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowLeft);
+    s.manage(&mut sv);
+    assert_eq!(focus(&s), Some(1), "Left enters from the right end");
+
+    let (mut s, mut sv) = no_focus_workspace();
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowRight);
+    s.manage(&mut sv);
+    assert_eq!(focus(&s), Some(0), "Right enters from the left end");
+
+    // The output-aware variants enter the strip too, instead of looking for an
+    // output to move to from a focus they do not have.
+    let (mut s, mut sv) = no_focus_workspace();
+    crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowOrOutputLeft);
+    s.manage(&mut sv);
+    assert_eq!(focus(&s), Some(1));
     s.check_consistent();
 }

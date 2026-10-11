@@ -65,6 +65,7 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         | A::MoveWindowLeftOrToOutputLeft
         | A::MoveWindowRightOrToOutputRight
         | A::ToggleWorkspaceFloating
+        | A::ToggleStickyWindow
         | A::FocusWorkspaceAbove
         | A::FocusWorkspaceBelow
         | A::FocusWorkspaceOrOutputAbove
@@ -194,37 +195,54 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         }
         A::FocusWindowLeft => {
             let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
-            let Some(window_idx) = workspace.focused_window_idx else {
-                return;
+            // A stale index counts as no focus (the layout treats it the same
+            // way). No focus at all — a sticky window on a workspace that has
+            // none — enters the strip from the end this key points at.
+            let current = workspace
+                .focused_window_idx
+                .filter(|idx| *idx < workspace.window_list.len());
+            let target = match current {
+                None => workspace.window_list.len().checked_sub(1),
+                Some(idx) => idx.checked_sub(1),
             };
-            if window_idx >= workspace.window_list.len() || window_idx == 0 {
-                return;
+            if let Some(target) = target {
+                workspace.focused_window_idx = Some(target);
             }
-            workspace.focused_window_idx = Some(window_idx - 1);
         }
         A::FocusWindowRight => {
             let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
-            let Some(window_idx) = workspace.focused_window_idx else {
-                return;
+            let current = workspace
+                .focused_window_idx
+                .filter(|idx| *idx < workspace.window_list.len());
+            let target = match current {
+                None => (!workspace.window_list.is_empty()).then_some(0),
+                Some(idx) => idx
+                    .checked_add(1)
+                    .filter(|next| *next < workspace.window_list.len()),
             };
-            if window_idx >= workspace.window_list.len()
-                || window_idx == workspace.window_list.len() - 1
-            {
-                return;
+            if let Some(target) = target {
+                workspace.focused_window_idx = Some(target);
             }
-            workspace.focused_window_idx = Some(window_idx + 1);
         }
         A::FocusWindowOrOutputLeft | A::FocusWindowOrOutputRight => {
             let right = *action == A::FocusWindowOrOutputRight;
-            let workspace = state.wm.workspace(output_idx, workspace_idx).unwrap();
-            let Some(window_idx) = workspace.focused_window_idx else {
+            let (current, len) = {
+                let workspace = state.wm.workspace(output_idx, workspace_idx).unwrap();
+                (workspace.focused_window_idx, workspace.window_list.len())
+            };
+            let inner = if right {
+                KeybindingAction::FocusWindowRight
+            } else {
+                KeybindingAction::FocusWindowLeft
+            };
+            // No focus: enter the strip rather than falling through to the
+            // output, which would leave this workspace unfocused.
+            let Some(window_idx) = current.filter(|idx| *idx < len) else {
+                dispatch_action(state, &inner);
                 return;
             };
-            if window_idx >= workspace.window_list.len() {
-                return;
-            }
             let at_edge = if right {
-                window_idx == workspace.window_list.len() - 1
+                window_idx == len - 1
             } else {
                 window_idx == 0
             };
@@ -237,11 +255,6 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                 dispatch_action(state, &redirect);
                 return;
             }
-            let inner = if right {
-                KeybindingAction::FocusWindowRight
-            } else {
-                KeybindingAction::FocusWindowLeft
-            };
             dispatch_action(state, &inner);
             return;
         }
@@ -322,6 +335,11 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                     // Don't snap current to floating; layout.update sets
                     // finish so the change is committed in one pass.
                 }
+            }
+        }
+        A::ToggleStickyWindow => {
+            if let Some(window) = state.wm.focused_window_mut() {
+                window.geom.is_sticky = !window.geom.is_sticky;
             }
         }
         A::FocusWorkspaceAbove | A::FocusWorkspaceBelow | A::FocusWorkspaceNumber(_) => {

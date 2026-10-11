@@ -47,6 +47,8 @@ pub struct WindowGeom {
     pub proportion: f32,
     pub is_fullscreen: bool,
     pub is_floating: bool,
+    /// Follow the focused workspace of this output (i3/kwm sticky).
+    pub is_sticky: bool,
     pub is_closing: bool,
     /// Geometry while floating (rest position).
     pub floating: Rectangle,
@@ -80,6 +82,7 @@ impl WindowGeom {
             proportion,
             is_fullscreen: false,
             is_floating: false,
+            is_sticky: false,
             is_closing: false,
             floating: current,
             current,

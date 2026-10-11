@@ -42,6 +42,7 @@ pub fn default_keybindings() -> Vec<Keybinding> {
         kb("Up", &["mod4", "ctrl"], A::MoveFloatingWindowUp),
         kb("Down", &["mod4", "ctrl"], A::MoveFloatingWindowDown),
         kb("v", &["mod4"], A::ToggleWorkspaceFloating),
+        kb("s", &["mod4"], A::ToggleStickyWindow),
         kb("Up", &["mod4"], A::FocusWorkspaceAbove),
         kb("Down", &["mod4"], A::FocusWorkspaceBelow),
         kb("grave", &["mod4"], A::FocusWorkspacePrevious),

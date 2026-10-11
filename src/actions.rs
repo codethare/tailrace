@@ -59,6 +59,7 @@ pub enum KeybindingAction {
     MoveWindowLeftOrToOutputLeft,
     MoveWindowRightOrToOutputRight,
     ToggleWorkspaceFloating,
+    ToggleStickyWindow,
     FocusWorkspaceAbove,
     FocusWorkspaceBelow,
     FocusWorkspaceOrOutputAbove,

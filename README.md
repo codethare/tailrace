@@ -114,6 +114,7 @@ floated by hand stays floated.
 | `Super` `Shift` `Left` / `Right` | Move window left / right |
 | `Super` `Ctrl` `Left`/`Right`/`Up`/`Down` | Move floating window |
 | `Super` `v` | Toggle window floating |
+| `Super` `s` | Toggle sticky window |
 | `Super` `Up` / `Down` | Focus workspace above / below |
 | `Super` `` ` `` | Previous workspace |
 | `Super` `1`–`0` | Focus workspace 1–10 |
@@ -132,6 +133,11 @@ floated by hand stays floated.
 `{ spawn = ["sh", "-c", "foo | bar"] }` is how you get pipes, variables or
 quoting. `toggle_workspace_floating` (historical name, kept for compatibility
 with rill-ed) toggles the focused *window*'s floating state.
+
+`toggle_sticky_window` marks the focused window sticky: it follows the focused
+workspace of its output, i3/kwm style. A sticky window keeps the focus when it
+had it before the switch, and never takes the focus from a window already on
+the target workspace. Un-marking leaves it where it is.
 
 ### Default pointer bindings
 

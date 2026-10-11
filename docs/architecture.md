@@ -138,6 +138,23 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   from the node origin, so a content clip that cuts the left or top edge draws
   the frame shifted into the window. `set_clip_box` clips the border boxes
   themselves instead, which stays aligned.
+- **Sticky is an invariant, not a switch hook.** `layout::update` starts with
+  `WindowManager::pull_sticky_windows`, which moves every `geom.is_sticky`
+  window onto its output's focused workspace. It runs after the overview early
+  return (the overview grid must not be rearranged) and appends, so the target
+  workspace keeps its focus; only a target with no focus takes the sticky
+  window that was focused before the switch. Every path that changes
+  `focused_workspace_idx` (keybindings, overview select/cancel, previous
+  workspace, lock restore) stays unaware of stickiness.
+- **A workspace with windows can have no focused window.** That is what a
+  sticky switch onto an empty workspace produces (the window follows, the
+  focus does not), and it must not freeze the layout: `scroller::apply`
+  anchors the strip on the first tiled window when there is nothing to focus
+  — the same path a focused *floating* window already took — so every window
+  still gets a `finish`. The direction keys enter that strip from the end they
+  point at (`FocusWindowLeft` → last window, `FocusWindowRight` → first),
+  including the `…OrOutput` variants, which do not fall through to another
+  output from a workspace that has no focus.
 - **Protocol updates** are a `protocol/update.sh <ref>` plus a bind version
   bump in `app.rs`; see `protocol/README.md` for the current revision and what
   is still unused.

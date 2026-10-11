@@ -34,12 +34,14 @@ pub fn apply(
         }
     }
 
-    let Some(focused_window_idx) = focused_window_idx else {
-        return;
-    };
-    if focused_window_idx >= windows.len() {
+    if focused_window_idx.is_some_and(|idx| idx >= windows.len()) {
         return;
     }
+    // Nothing tiled to focus: the focused window is floating, or the workspace
+    // has no focus at all (a sticky window pulled onto an empty one). Either
+    // way the strip is anchored on the first tiled window instead of following
+    // the focus, so every window still gets a layout.
+    let focused_window_idx = focused_window_idx.filter(|idx| !windows[*idx].is_floating);
     let window_count = windows.len();
 
     // Floating windows take no space in the strip; only tiled windows count
@@ -55,7 +57,7 @@ pub fn apply(
 
     let mut rectangle;
 
-    if !windows[focused_window_idx].is_floating {
+    if let Some(focused_window_idx) = focused_window_idx {
         rectangle = focused_window_layout(
             &windows[focused_window_idx],
             output_rect,
@@ -105,9 +107,10 @@ pub fn apply(
             window.finish = Some(rectangle);
         }
     } else {
-        // Focused window is floating: tile non-floating windows from the first one.
-        // Keep anchor at its current.x (no left-edge clamp) so the strip preserves
-        // its scroll position instead of jumping back to the leftmost window.
+        // No focused tile: lay out every tiled window from the first one.
+        // Keep anchor at its current.x (no left-edge clamp) so the strip
+        // preserves its scroll position instead of jumping back to the
+        // leftmost window.
         let Some(anchor_idx) = windows.iter().position(|w| !w.is_floating) else {
             return;
         };
@@ -425,6 +428,37 @@ mod tests {
         // Finish is the on-screen rightmost slot, not the off-screen start.
         assert!(finish.x < NON_EXCLUSIVE.x + NON_EXCLUSIVE.width);
         assert!(finish.x >= NON_EXCLUSIVE.x);
+    }
+
+    /// A workspace with windows but no focus still gets a layout. Sticky
+    /// windows are pulled onto the focused workspace even when it has no
+    /// focused window, and that must not freeze their geometry: left over from
+    /// a larger output, the window still follows a smaller one.
+    #[test]
+    fn windows_without_focus_are_still_laid_out() {
+        let config = Config::default();
+        let stale = Rectangle {
+            x: 9,
+            y: 9,
+            width: 946,
+            height: 1062,
+        };
+        let mut windows = vec![tiled(0.5)];
+        windows[0].current = stale;
+        windows[0].floating = stale;
+
+        let small = Rectangle {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        };
+        super::apply(&mut windows, None, false, small, small, &config, 0);
+
+        let finish = windows[0]
+            .finish
+            .expect("an unfocused workspace is still laid out");
+        assert_eq!(finish.height, small.height - 2 * config.vertical_gap);
     }
 
     /// niri's `on-overflow`: center only when the newly focused window does

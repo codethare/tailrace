@@ -33,6 +33,10 @@ pub fn update(wm: &mut WindowManager) {
         return;
     }
 
+    // Sticky windows follow the focused workspace; before the layout so they
+    // are placed on their new workspace in the same pass.
+    wm.pull_sticky_windows();
+
     let config = wm.config.clone();
     for output in wm.outputs.iter_mut() {
         // Freshly re-added outputs start at 0x0 until the dimensions event
