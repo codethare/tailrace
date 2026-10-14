@@ -170,11 +170,17 @@ pub fn compute_clip_box(
         clip_height = output_bottom - window_top;
     }
 
+    // A window rect can be negative while an output is being reconfigured: its
+    // rectangle is still 0x0 and the layout subtracted the window's offset from
+    // it. river rejects a negative box with a protocol error, which kills this
+    // client and takes the whole desktop with it, so never send one. A box with
+    // 0 width or height disables clipping, which is what an output with no area
+    // should mean.
     Rectangle {
         x: clip_x - border_width as i32,
         y: clip_y - border_width as i32,
-        width: clip_width,
-        height: clip_height,
+        width: clip_width.max(0),
+        height: clip_height.max(0),
     }
 }
 
@@ -418,6 +424,28 @@ mod tests {
 
         assert_eq!(clip.width, 420); // 1920 - 1500
         assert_eq!(clip.height, 400);
+        assert_eq!(clip.x, -3);
+        assert_eq!(clip.y, -3);
+    }
+
+    #[test]
+    fn compute_clip_box_never_goes_negative_while_an_output_is_reconfigured() {
+        // While an output is being reconfigured its rectangle is not up to date
+        // yet, and the layout can then hand out a window rect with a negative
+        // size: this exact one was observed when an output came back on. river
+        // rejects a negative box with a protocol error, which disconnects this
+        // client (and with it the whole desktop), so the box is clamped to 0,
+        // which the protocol defines as clipping disabled.
+        let window = Rectangle {
+            x: 9,
+            y: 9,
+            width: -13,
+            height: -18,
+        };
+        let clip = compute_clip_box(window, OUTPUT, 3);
+
+        assert_eq!(clip.width, 0);
+        assert_eq!(clip.height, 0);
         assert_eq!(clip.x, -3);
         assert_eq!(clip.y, -3);
     }
