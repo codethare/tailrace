@@ -5,7 +5,7 @@
 
 use super::reload_config;
 use crate::actions::KeybindingAction;
-use crate::types::Status;
+use crate::types::{ColumnWidth, Status};
 use KeybindingAction as A;
 /// The action state machine (rill-ed keybindingPressed), split per category.
 /// Every state-changing action ends with layout::update + status Layout; the
@@ -48,6 +48,11 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         A::CloseWindow
         | A::ToggleFullscreen
         | A::ToggleMaximizeColumn
+        | A::MaximizeWindowToEdges
+        | A::ExpandColumnToAvailableWidth
+        | A::CenterColumn
+        | A::SwitchPresetColumnWidth
+        | A::SwitchPresetColumnWidthBack
         | A::AdjustWindowWidth(_)
         | A::SetWindowWidth(_)
         | A::AdjustFloatingWindowSize(_)
@@ -56,6 +61,7 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         | A::FocusWindowOrOutputLeft
         | A::FocusWindowRight
         | A::FocusWindowOrOutputRight
+        | A::FocusWindowPrevious
         | A::MoveWindowLeft
         | A::MoveWindowRight
         | A::MoveFloatingWindowLeft
@@ -77,10 +83,18 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         | A::MoveWindowToWorkspaceOrOutputAbove
         | A::MoveWindowToWorkspaceOrOutputBelow
         | A::MoveWindowToWorkspaceNumber(_)
+        | A::FocusWorkspaceName(_)
+        | A::MoveWindowToWorkspaceName(_)
         | A::FocusOutputLeft
         | A::FocusOutputRight
         | A::FocusOutputAbove
         | A::FocusOutputBelow
+        | A::FocusOutputNext
+        | A::FocusOutputPrevious
+        | A::MoveWorkspaceToOutputLeft
+        | A::MoveWorkspaceToOutputRight
+        | A::MoveWorkspaceToOutputAbove
+        | A::MoveWorkspaceToOutputBelow
         | A::MoveWindowToOutputLeft
         | A::MoveWindowToOutputRight
         | A::MoveWindowToOutputAbove
@@ -111,6 +125,41 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                     1.0
                 };
             }
+        }
+        A::MaximizeWindowToEdges => {
+            if let Some(window) = state.wm.focused_window_mut() {
+                if window.geom.is_floating {
+                    return;
+                }
+                window.geom.is_maximized_to_edges = !window.geom.is_maximized_to_edges;
+            }
+        }
+        A::ExpandColumnToAvailableWidth => {
+            let non_exclusive = state.wm.outputs[output_idx].non_exclusive;
+            let gap = config.horizontal_gap;
+            let borders = 2 * config.border.width as i32;
+            if let Some(window) = state.wm.focused_window_mut() {
+                if window.geom.is_floating || window.geom.is_fullscreen {
+                    return;
+                }
+                let right = non_exclusive.x + non_exclusive.width;
+                let available = right - window.geom.current.x;
+                if available <= gap + borders {
+                    return;
+                }
+                let base_width = (non_exclusive.width - gap) as f32;
+                window.geom.proportion = (available as f32 / base_width).min(1.0);
+            }
+        }
+        A::CenterColumn => {
+            state
+                .wm
+                .workspace_mut(output_idx, workspace_idx)
+                .unwrap()
+                .center_latch = true;
+        }
+        A::SwitchPresetColumnWidth | A::SwitchPresetColumnWidthBack => {
+            cycle_preset_width(state, output_idx, *action == A::SwitchPresetColumnWidth);
         }
         A::AdjustWindowWidth(increment) => {
             let non_exclusive = state.wm.outputs[output_idx].non_exclusive;
@@ -192,6 +241,20 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                     output_rect.y + output_rect.height - window.geom.floating.y,
                 );
             }
+        }
+        A::FocusWindowPrevious => {
+            let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
+            let Some(previous) = workspace.last_focused_window.clone() else {
+                return;
+            };
+            let Some(idx) = workspace
+                .window_list
+                .iter()
+                .position(|w| w.river_window == previous)
+            else {
+                return;
+            };
+            workspace.focused_window_idx = Some(idx);
         }
         A::FocusWindowLeft => {
             let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
@@ -465,6 +528,43 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                 workspace_idx,
             });
         }
+        A::FocusWorkspaceName(name) | A::MoveWindowToWorkspaceName(name) => {
+            let Some((output_name, slot)) = config.workspace_slot(name) else {
+                return;
+            };
+            let target_output = output_name
+                .and_then(|name| {
+                    state
+                        .wm
+                        .outputs
+                        .iter()
+                        .position(|o| o.name.as_deref() == Some(name))
+                })
+                .unwrap_or(output_idx);
+            if matches!(action, A::MoveWindowToWorkspaceName(_)) {
+                let Some(window_idx) = state
+                    .wm
+                    .workspace(output_idx, workspace_idx)
+                    .and_then(|ws| ws.focused_window_idx)
+                else {
+                    return;
+                };
+                state.wm.move_window_to_workspace(
+                    (output_idx, workspace_idx),
+                    (target_output, slot),
+                    window_idx,
+                );
+            } else if target_output == output_idx && slot == workspace_idx {
+                return;
+            }
+            state.wm.focused_output_idx = Some(target_output);
+            state.wm.outputs[target_output].focused_workspace_idx = slot;
+            state.wm.needs_pointer_warp |= target_output != output_idx;
+            state.wm.previous_workspace = Some(crate::types::OverviewHome {
+                output_idx,
+                workspace_idx,
+            });
+        }
         A::FocusOutputLeft | A::FocusOutputRight | A::FocusOutputAbove | A::FocusOutputBelow => {
             if let Some(target) = adjacent_output(&state.wm, output_idx, action) {
                 state.wm.focused_output_idx = Some(target);
@@ -474,6 +574,49 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                     workspace_idx,
                 });
             }
+        }
+        A::FocusOutputNext | A::FocusOutputPrevious => {
+            let forward = *action == A::FocusOutputNext;
+            let Some(target) = step_output(&state.wm, output_idx, forward) else {
+                return;
+            };
+            state.wm.focused_output_idx = Some(target);
+            state.wm.needs_pointer_warp = true;
+            state.wm.previous_workspace = Some(crate::types::OverviewHome {
+                output_idx,
+                workspace_idx,
+            });
+        }
+        A::MoveWorkspaceToOutputLeft
+        | A::MoveWorkspaceToOutputRight
+        | A::MoveWorkspaceToOutputAbove
+        | A::MoveWorkspaceToOutputBelow => {
+            let Some(target_idx) = adjacent_output(&state.wm, output_idx, action) else {
+                return;
+            };
+            // Both outputs keep their own slot: the two workspaces exchange
+            // places, which is what moving a workspace between two monitors
+            // with one workspace each looks like in niri.
+            let target_ws = state.wm.outputs[target_idx].focused_workspace_idx;
+            let (a, b) = if output_idx < target_idx {
+                ((output_idx, workspace_idx), (target_idx, target_ws))
+            } else {
+                ((target_idx, target_ws), (output_idx, workspace_idx))
+            };
+            {
+                let (left, right) = state.wm.outputs.split_at_mut(b.0);
+                std::mem::swap(
+                    &mut left[a.0].workspace_list[a.1],
+                    &mut right[0].workspace_list[b.1],
+                );
+            }
+            state.wm.focused_output_idx = Some(target_idx);
+            state.wm.outputs[target_idx].focused_workspace_idx = target_ws;
+            state.wm.needs_pointer_warp = true;
+            state.wm.previous_workspace = Some(crate::types::OverviewHome {
+                output_idx,
+                workspace_idx,
+            });
         }
         A::MoveWindowToOutputLeft
         | A::MoveWindowToOutputRight
@@ -530,6 +673,52 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
     state.wm.status = Status::Layout;
 }
 
+/// Cycle the focused window's width through `preset_column_widths` (niri's
+/// `switch-preset-column-width`): a width that is not a preset goes to the
+/// nearest one in the direction of the action.
+fn cycle_preset_width(state: &mut crate::app::AppData, output_idx: usize, forward: bool) {
+    let config = state.wm.config.clone();
+    let presets = &config.preset_column_widths;
+    if presets.is_empty() {
+        return;
+    }
+    let non_exclusive = state.wm.outputs[output_idx].non_exclusive;
+    let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
+    if base_width <= 0.0 {
+        return;
+    }
+    let px = |width: &ColumnWidth| match *width {
+        ColumnWidth::Proportion(proportion) => (base_width * proportion) as i32,
+        ColumnWidth::Fixed(px) => px,
+    };
+    let Some(current) = state
+        .wm
+        .focused_window()
+        .filter(|w| !w.geom.is_floating && !w.geom.is_fullscreen)
+        .map(|w| (base_width * w.geom.proportion) as i32)
+    else {
+        return;
+    };
+
+    let target = match presets.iter().position(|p| (px(p) - current).abs() <= 1) {
+        Some(idx) if forward => presets[(idx + 1) % presets.len()],
+        Some(idx) => presets[(idx + presets.len() - 1) % presets.len()],
+        None if forward => *presets
+            .iter()
+            .find(|p| px(p) > current)
+            .unwrap_or(&presets[0]),
+        None => *presets
+            .iter()
+            .rev()
+            .find(|p| px(p) < current)
+            .unwrap_or(&presets[presets.len() - 1]),
+    };
+    let proportion = px(&target) as f32 / base_width;
+    if let Some(window) = state.wm.focused_window_mut() {
+        window.geom.proportion = proportion;
+    }
+}
+
 /// Swap target for a horizontal window move; None when the move stays in
 /// place (list edge, or the underflow that used to panic with index
 /// 18446744073709551615 when focus sat on window 0 and `window_idx - 1`
@@ -557,19 +746,33 @@ fn adjacent_output(
             return false;
         }
         match action {
-            A::FocusOutputLeft | A::MoveWindowToOutputLeft => {
+            A::FocusOutputLeft | A::MoveWindowToOutputLeft | A::MoveWorkspaceToOutputLeft => {
                 target.rectangle.x + target.rectangle.width == output.rectangle.x
             }
-            A::FocusOutputRight | A::MoveWindowToOutputRight => {
+            A::FocusOutputRight | A::MoveWindowToOutputRight | A::MoveWorkspaceToOutputRight => {
                 target.rectangle.x == output.rectangle.x + output.rectangle.width
             }
-            A::FocusOutputAbove | A::MoveWindowToOutputAbove => {
+            A::FocusOutputAbove | A::MoveWindowToOutputAbove | A::MoveWorkspaceToOutputAbove => {
                 target.rectangle.y + target.rectangle.height == output.rectangle.y
             }
-            A::FocusOutputBelow | A::MoveWindowToOutputBelow => {
+            A::FocusOutputBelow | A::MoveWindowToOutputBelow | A::MoveWorkspaceToOutputBelow => {
                 target.rectangle.y == output.rectangle.y + output.rectangle.height
             }
             _ => false,
         }
     })
+}
+
+/// The next output in list order, wrapping; None when there is only one.
+fn step_output(wm: &crate::wm::WindowManager, from: usize, forward: bool) -> Option<usize> {
+    let len = wm.outputs.len();
+    (1..len)
+        .map(|step| {
+            if forward {
+                (from + step) % len
+            } else {
+                (from + len - step) % len
+            }
+        })
+        .find(|idx| !wm.outputs[*idx].is_removed)
 }

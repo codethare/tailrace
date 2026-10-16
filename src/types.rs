@@ -20,6 +20,21 @@ pub struct PendingWindow {
     /// river sends capture_sessions once when the window object is created,
     /// before `dimensions` maps it, so the count has to survive the pending phase.
     pub capture_sessions: u32,
+    /// The client's own size preference, sent before `dimensions` like the rest
+    /// of the pending state.
+    pub bounds: ContentBounds,
+    /// The window has a parent: a dialog or similar, floated on open.
+    pub has_parent: bool,
+}
+
+/// A window's own content size limits (river's `dimensions_hint`), possibly
+/// overridden by window rules. 0 means "no bound", as in the protocol.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContentBounds {
+    pub min_width: i32,
+    pub max_width: i32,
+    pub min_height: i32,
+    pub max_height: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,7 +60,13 @@ impl Rectangle {
 pub struct WindowGeom {
     /// Fraction of the output's available width this column occupies.
     pub proportion: f32,
+    /// Content size limits; the layout never gives the window a slot its
+    /// content does not fit in.
+    pub bounds: ContentBounds,
     pub is_fullscreen: bool,
+    /// Fills the workspace area (niri's maximize-to-edges): the slot the window
+    /// would occupy is unaffected, so its neighbours do not move.
+    pub is_maximized_to_edges: bool,
     pub is_floating: bool,
     /// Follow the focused workspace of this output (i3/kwm sticky).
     pub is_sticky: bool,
@@ -80,7 +101,9 @@ impl WindowGeom {
     pub fn new(proportion: f32, current: Rectangle) -> WindowGeom {
         WindowGeom {
             proportion,
+            bounds: ContentBounds::default(),
             is_fullscreen: false,
+            is_maximized_to_edges: false,
             is_floating: false,
             is_sticky: false,
             is_closing: false,
@@ -124,10 +147,18 @@ pub struct Workspace {
     /// "on_overflow"` needs to know which window the focus came from, and only
     /// `layout::update` maintains this.
     pub previous_focused_window_idx: Option<usize>,
+    /// The window focus came from, kept by identity so `focus_window_previous`
+    /// survives reordering; index-based state would point at the wrong window
+    /// after a move. Only `layout::update` maintains this.
+    pub last_focused_window: Option<RiverWindowV1>,
     /// The `on_overflow` decision taken when the focus last moved. Reused while
     /// the focus stays put, so an unrelated layout pass cannot un-center the
     /// window.
     pub on_overflow_center: bool,
+    /// `center_column` asked for the focused window to be centered. Latched like
+    /// `on_overflow_center` and cleared when the focus moves, so an unrelated
+    /// pass cannot scroll the window back out of the middle.
+    pub center_latch: bool,
 }
 
 impl Workspace {
@@ -136,7 +167,9 @@ impl Workspace {
             window_list: Vec::new(),
             focused_window_idx: None,
             previous_focused_window_idx: None,
+            last_focused_window: None,
             on_overflow_center: false,
+            center_latch: false,
         }
     }
 
@@ -251,6 +284,15 @@ pub struct Cursor {
     pub size: u32,
 }
 
+/// A workspace a rule or action refers to: a number (1-10, as in
+/// `focus_workspace_number`) or a name from `[[workspace]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum WorkspaceTarget {
+    Number(usize),
+    Name(String),
+}
+
 /// Rule matching windows by exact app_id and glob title. All set fields must
 /// match. Title supports `*` (any run, including empty) and `?` (single char).
 ///
@@ -262,12 +304,35 @@ pub struct WindowRule {
     pub app_id: Option<String>,
     pub title: Option<String>,
     pub floating: bool,
-    /// Workspace number (1-10, as in `focus_workspace_number`) to open on.
-    pub open_on_workspace: Option<usize>,
+    /// Workspace to open on.
+    pub open_on_workspace: Option<WorkspaceTarget>,
     /// river output name (e.g. "HDMI-A-1") to open on.
     pub open_on_output: Option<String>,
     /// Proportion of the output width, overriding `default_window_width`.
     pub default_window_width: Option<f32>,
+    /// Content width limits in pixels, overriding the client's own hint.
+    pub min_width: Option<i32>,
+    pub max_width: Option<i32>,
+}
+
+/// A column width preset: a proportion of the output or a fixed pixel width.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnWidth {
+    Proportion(f32),
+    Fixed(i32),
+}
+
+/// A name for one of an output's fixed workspaces (niri's named workspaces,
+/// without dynamic ones: the slot is what the workspace actually is).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceName {
+    pub name: String,
+    /// 1-10, as in `focus_workspace_number`.
+    pub slot: usize,
+    /// Output the name resolves to; the focused output when omitted.
+    pub output: Option<String>,
 }
 
 impl WindowRule {
@@ -344,6 +409,11 @@ pub struct Config {
     /// Default proportion of the output's available width for a new window.
     pub default_window_width: f32,
     pub center_focused_window: CenterFocused,
+    /// Center a workspace that holds a single window, whatever
+    /// `center_focused_window` says.
+    pub always_center_single_column: bool,
+    /// Widths `switch_preset_column_width` cycles through.
+    pub preset_column_widths: Vec<ColumnWidth>,
     pub no_csd: bool,
     pub border: Border,
     pub cursor: Option<Cursor>,
@@ -353,6 +423,17 @@ pub struct Config {
     pub keybindings: Vec<Keybinding>,
     pub pointer_bindings: Vec<PointerBinding>,
     pub window_rules: Vec<WindowRule>,
+    pub workspace: Vec<WorkspaceName>,
+}
+
+impl Config {
+    /// Resolve a `[[workspace]]` name to its (output name, 0-based slot).
+    pub fn workspace_slot(&self, name: &str) -> Option<(Option<&str>, usize)> {
+        self.workspace
+            .iter()
+            .find(|w| w.name == name)
+            .map(|w| (w.output.as_deref(), w.slot - 1))
+    }
 }
 
 impl Default for Border {
@@ -382,6 +463,12 @@ impl Default for Config {
             horizontal_gap: 9,
             default_window_width: 0.5,
             center_focused_window: CenterFocused::Never,
+            always_center_single_column: false,
+            preset_column_widths: vec![
+                ColumnWidth::Proportion(0.33333),
+                ColumnWidth::Proportion(0.5),
+                ColumnWidth::Proportion(0.66667),
+            ],
             no_csd: true,
             border: Border::default(),
             cursor: None,
@@ -390,6 +477,7 @@ impl Default for Config {
             keybindings: Vec::new(),
             pointer_bindings: Vec::new(),
             window_rules: Vec::new(),
+            workspace: Vec::new(),
         }
     }
 }

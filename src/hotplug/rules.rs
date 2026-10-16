@@ -6,7 +6,7 @@
 //! before the window is added to a workspace.
 
 use super::*;
-use crate::types::WindowRule;
+use crate::types::{WindowRule, WorkspaceName, WorkspaceTarget};
 
 fn rule(app_id: Option<&str>, title: Option<&str>, floating: bool) -> WindowRule {
     WindowRule {
@@ -113,7 +113,7 @@ fn a_late_app_id_does_not_apply_the_rule() {
 #[test]
 fn a_rule_opens_the_window_on_its_workspace() {
     let mut pinning = rule(Some("foot"), None, false);
-    pinning.open_on_workspace = Some(3);
+    pinning.open_on_workspace = Some(WorkspaceTarget::Number(3));
     let (mut s, mut sv) = scene(vec![pinning]);
     let win = s.add_pending_window(&mut sv);
     send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
@@ -192,4 +192,76 @@ fn a_late_title_does_not_apply_the_rule() {
     send_str(&mut s, &mut sv, &win, EVT_WIN_TITLE, "Picture-in-Picture");
     s.manage(&mut sv);
     assert!(!only_window(&s).geom.is_floating);
+}
+
+/// `open_on_workspace` also takes a `[[workspace]]` name, which resolves to
+/// that name's slot.
+#[test]
+fn a_rule_opens_the_window_on_a_named_workspace() {
+    let mut pinning = rule(Some("foot"), None, false);
+    pinning.open_on_workspace = Some(WorkspaceTarget::Name("chat".into()));
+    let (mut s, mut sv) = scene(vec![pinning]);
+    s.config_mut().workspace = vec![WorkspaceName {
+        name: "chat".into(),
+        slot: 4,
+        output: None,
+    }];
+
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let workspaces = &s.state.wm.outputs[0].workspace_list;
+    assert_eq!(workspaces[3].window_list.len(), 1, "on slot 4");
+    assert_eq!(workspaces[0].window_list.len(), 0, "not the focused one");
+}
+
+/// A named workspace carries its output, so a rule that only names a workspace
+/// still opens the window on the right monitor.
+#[test]
+fn a_named_workspace_pins_its_output() {
+    let mut pinning = rule(Some("foot"), None, false);
+    pinning.open_on_workspace = Some(WorkspaceTarget::Name("chat".into()));
+    let (mut s, mut sv) = scene(vec![pinning]);
+    s.add_output(&mut sv, "B", (1920, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.config_mut().workspace = vec![WorkspaceName {
+        name: "chat".into(),
+        slot: 2,
+        output: Some("B".into()),
+    }];
+
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    assert_eq!(s.state.wm.outputs[1].workspace_list[1].window_list.len(), 1);
+    assert_eq!(s.state.wm.outputs[0].workspace_list[0].window_list.len(), 0);
+}
+
+/// Window rules can override the client's own size hints.
+#[test]
+fn a_rule_sets_content_width_bounds() {
+    let mut narrow = rule(Some("foot"), None, false);
+    narrow.default_window_width = Some(0.25);
+    narrow.min_width = Some(1000);
+    let (mut s, mut sv) = scene(vec![narrow]);
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+    // 1000 of content plus a 3px border on each side.
+    assert_eq!(only_window(&s).geom.current.width, 1006);
+
+    let mut wide = rule(Some("foot"), None, false);
+    wide.default_window_width = Some(0.75);
+    wide.max_width = Some(300);
+    let (mut s, mut sv) = scene(vec![wide]);
+    let win = s.add_pending_window(&mut sv);
+    send_str(&mut s, &mut sv, &win, EVT_WIN_APP_ID, "foot");
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+    assert_eq!(only_window(&s).geom.current.width, 306);
 }

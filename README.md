@@ -25,6 +25,10 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 * Multi-output with window migration (windows return to their output when it reappears)
 * TTY switch resilience — workspaces survive output removal (laptop panel off, lock)
 * Window rules by exact `app_id` / glob `title`: float, open on a given workspace or output, or open at a given width
+* Dialogs (windows with a parent) float instead of taking a column
+* A window's own minimum/maximum width is honoured, so a client is never squeezed into a slot it cannot render in
+* Preset column widths, cycled with one key; center, expand and maximize-to-edges on demand
+* Named workspaces, and moving a workspace to another output
 * Focus follows the mouse pointer (opt-in, sloppy focus)
 * Session-lock focus save/restore
 
@@ -81,20 +85,25 @@ the error is printed.
 | `horizontal_gap` | `9` | Gap between adjacent windows |
 | `default_window_width` | `0.5` | Starting width of a new window, as a proportion of the output |
 | `center_focused_window` | `"never"` | Center the focused window: `never`, `always`, `single`, `on_overflow` (when it does not fit next to the window the focus came from) |
+| `always_center_single_column` | `false` | Center a workspace that holds a single window, whatever `center_focused_window` says |
+| `preset_column_widths` | 1/3, 1/2, 2/3 | Widths `switch_preset_column_width` cycles through: `{ proportion = 0.5 }` of the output or `{ fixed = 1280 }` pixels |
 | `focus_follows_pointer` | `false` | Keyboard focus follows the mouse pointer (sloppy focus) |
 | `no_csd` | `true` | Disable client side decorations |
 | `border.width` | `3` | Border width in pixels |
 | `border.focused_color`, `border.unfocused_color` | | `{ r, g, b, a }` with 0–255 channels and 0.0–1.0 alpha |
 | `cursor.theme`, `cursor.size` | | XCursor theme and size (omit for the default cursor) |
 | `spawn_at_startup` | `[]` | Commands spawned detached at startup |
+| `[[workspace]]` | `[]` | Names for workspaces, so bindings and rules can refer to them: `name`, `slot` (1-10), optional `output` |
 | `window_rules` | `[]` | Match by `app_id` and/or glob `title`; matched windows float, open on a workspace or output, or open at a width |
 
-Rule fields: `floating`, `open_on_workspace` (1-10, as in
-`focus_workspace_number`), `open_on_output` (a river output name such as
-`HDMI-A-1`; one that is not attached falls back to the focused output) and
-`default_window_width` (a proportion of the output, as at the top level). For
-each field the first matching rule that sets it wins; `floating` is an any-match.
-A value outside 1-10 for `open_on_workspace` is a parse error.
+Rule fields: `floating`, `open_on_workspace` (1-10 as in
+`focus_workspace_number`, or a `[[workspace]]` name), `open_on_output` (a river
+output name such as `HDMI-A-1`; one that is not attached falls back to the
+focused output), `default_window_width` (a proportion of the output, as at the
+top level) and `min_width` / `max_width` (content pixels, overriding the
+client's own size hint). For each field the first matching rule that sets it
+wins; `floating` is an any-match. A value outside 1-10 for a number
+`open_on_workspace`, or a workspace name nothing declares, is a parse error.
 
 Rules are evaluated when a window is first mapped, so `Super+r` does not
 re-evaluate them for already-open windows (matching rill-ed) — a window you
@@ -106,6 +115,10 @@ floated by hand stays floated.
 |---|---|
 | `Super` `q` | Close window |
 | `Super` `f` | Toggle fullscreen |
+| `Super` `Shift` `f` | Maximize the focused window to the workspace edges (no gaps, no borders, no wider slot) |
+| `Super` `w` / `Super` `Shift` `w` | Cycle the focused window's width through `preset_column_widths`, forwards / backwards |
+| `Super` `Shift` `e` | Expand the focused window to the available width |
+| `Super` `Shift` `c` | Center the focused window |
 | `Super` `minus` / `equal` | Decrease / increase window width by 0.1 |
 | `Super` `BackSpace` | Set window width to 0.5 |
 | `Super` `Ctrl` `minus` / `equal` | Shrink / grow floating window |
@@ -121,6 +134,8 @@ floated by hand stays floated.
 | `Super` `Shift` `Up` / `Down` | Move window to workspace above / below |
 | `Super` `Shift` `1`–`0` | Move window to workspace 1–10 |
 | `Super` `h`/`j`/`k`/`l` | Focus output left/below/above/right |
+| `Super` `comma` / `period` | Focus previous / next output |
+| `Super` `Tab` | Focus the previously focused window |
 | `Super` `Shift` `h`/`j`/`k`/`l` | Move window to output left/below/above/right |
 | `Super` `Escape` | Exit river |
 | `Super` `Space` | Enter overview |

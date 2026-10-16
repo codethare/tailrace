@@ -144,6 +144,11 @@ impl WindowManager {
         target: (usize, usize),
         window_idx: usize,
     ) {
+        // A move onto the window's own workspace would take the list out and
+        // assign it back over itself, dropping the window: nothing to do.
+        if source == target {
+            return;
+        }
         // mem::take dance: two &mut Workspace from the same [Workspace; 10]
         // cannot coexist, so the source list is taken out first.
         let (mut source_list, mut source_focus) = {

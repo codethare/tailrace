@@ -145,8 +145,9 @@ pub fn apply_window_border(
     // Fullscreen windows fill their output rect exactly (place_window uses
     // border 0 for them); any border would be drawn by the compositor beyond
     // the rect, spilling onto a neighboring monitor's adjoining edge. Suppress
-    // borders for fullscreen like place_window does.
-    let width = if geom.is_fullscreen {
+    // borders for fullscreen like place_window does. A maximized-to-edges
+    // window covers the gaps the same way, and niri hides its border too.
+    let width = if geom.is_fullscreen || geom.is_maximized_to_edges {
         0
     } else {
         config.border.width

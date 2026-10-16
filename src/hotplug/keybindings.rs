@@ -22,6 +22,20 @@ fn every_action() -> Vec<KeybindingAction> {
         A::FocusWindowOrOutputLeft,
         A::FocusWindowRight,
         A::FocusWindowOrOutputRight,
+        A::FocusWindowPrevious,
+        A::MaximizeWindowToEdges,
+        A::ExpandColumnToAvailableWidth,
+        A::CenterColumn,
+        A::SwitchPresetColumnWidth,
+        A::SwitchPresetColumnWidthBack,
+        A::FocusWorkspaceName("chat".into()),
+        A::MoveWindowToWorkspaceName("chat".into()),
+        A::FocusOutputNext,
+        A::FocusOutputPrevious,
+        A::MoveWorkspaceToOutputLeft,
+        A::MoveWorkspaceToOutputRight,
+        A::MoveWorkspaceToOutputAbove,
+        A::MoveWorkspaceToOutputBelow,
         A::MoveWindowLeft,
         A::MoveWindowRight,
         A::MoveFloatingWindowLeft,
@@ -81,6 +95,12 @@ fn scene() -> (Session, MiniServer) {
     s.add_window(&mut sv);
     s.manage(&mut sv);
     s.state.config_path = Some(std::path::PathBuf::from("/nonexistent/tailrace.toml"));
+    // A declared name for the actions that refer to one.
+    s.config_mut().workspace = vec![crate::types::WorkspaceName {
+        name: "chat".into(),
+        slot: 3,
+        output: None,
+    }];
     s.check_consistent();
     (s, sv)
 }
@@ -444,5 +464,215 @@ fn direction_keys_enter_a_workspace_with_no_focus() {
     crate::keybinding::dispatch_action(&mut s.state, &KeybindingAction::FocusWindowOrOutputLeft);
     s.manage(&mut sv);
     assert_eq!(focus(&s), Some(1));
+    s.check_consistent();
+}
+
+/// One output with two 0.5 columns, the second window focused.
+fn two_windows() -> (Session, MiniServer) {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    (s, sv)
+}
+
+fn dispatch(s: &mut Session, sv: &mut MiniServer, action: KeybindingAction) {
+    crate::keybinding::dispatch_action(&mut s.state, &action);
+    s.manage(sv);
+}
+
+#[test]
+fn focus_window_previous_toggles_between_the_last_two() {
+    let (mut s, mut sv) = two_windows();
+    let focus = |s: &Session| s.state.wm.outputs[0].workspace_list[0].focused_window_idx;
+    assert_eq!(focus(&s), Some(1));
+
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusWindowLeft);
+    assert_eq!(focus(&s), Some(0));
+
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusWindowPrevious);
+    assert_eq!(focus(&s), Some(1), "back to the window we came from");
+
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusWindowPrevious);
+    assert_eq!(focus(&s), Some(0), "and back again");
+    s.check_consistent();
+}
+
+/// The presets cycle through the defaults (1/3, 1/2, 2/3) and wrap around; the
+/// back action walks the same list in reverse.
+#[test]
+fn switch_preset_column_width_cycles_the_presets() {
+    let (mut s, mut sv) = two_windows();
+    let proportion = |s: &Session| focused_window(s).geom.proportion;
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(close(proportion(&s), 0.5), "starts on the 1/2 preset");
+
+    dispatch(&mut s, &mut sv, KeybindingAction::SwitchPresetColumnWidth);
+    assert!(close(proportion(&s), 2.0 / 3.0));
+
+    dispatch(&mut s, &mut sv, KeybindingAction::SwitchPresetColumnWidth);
+    assert!(
+        close(proportion(&s), 1.0 / 3.0),
+        "wraps to the first preset"
+    );
+
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::SwitchPresetColumnWidthBack,
+    );
+    assert!(
+        close(proportion(&s), 2.0 / 3.0),
+        "back walks the list in reverse"
+    );
+}
+
+/// A column that is on no preset goes to the next larger one, not to the first.
+#[test]
+fn switch_preset_column_width_from_an_off_preset_width() {
+    let (mut s, mut sv) = two_windows();
+    dispatch(&mut s, &mut sv, KeybindingAction::SetWindowWidth(0.4));
+
+    dispatch(&mut s, &mut sv, KeybindingAction::SwitchPresetColumnWidth);
+    let proportion = focused_window(&s).geom.proportion;
+    assert!((proportion - 0.5).abs() < 0.01, "0.4 → the 1/2 preset");
+
+    dispatch(&mut s, &mut sv, KeybindingAction::SetWindowWidth(0.4));
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::SwitchPresetColumnWidthBack,
+    );
+    let proportion = focused_window(&s).geom.proportion;
+    assert!(
+        (proportion - 1.0 / 3.0).abs() < 0.01,
+        "0.4 ← the 1/3 preset"
+    );
+}
+
+#[test]
+fn center_column_centers_the_focused_window() {
+    let (mut s, mut sv) = two_windows();
+    let geom = |s: &Session| focused_window(s).geom.current;
+    assert_ne!(geom(&s).x, (1920 - geom(&s).width) / 2);
+
+    dispatch(&mut s, &mut sv, KeybindingAction::CenterColumn);
+    let g = geom(&s);
+    assert_eq!(g.x, (1920 - g.width) / 2);
+    assert_eq!(g.width, 946, "centering does not resize the column");
+
+    // Moving the focus away drops the latch: the new window is not centered.
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusWindowLeft);
+    let other = geom(&s);
+    assert_ne!(other.x, (1920 - other.width) / 2);
+}
+
+#[test]
+fn expand_column_to_available_width_fills_the_strip() {
+    let (mut s, mut sv) = two_windows();
+    // Two windows: the focused one already spans half the output.
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::ExpandColumnToAvailableWidth,
+    );
+    let g = focused_window(&s).geom.current;
+    assert_eq!(g.x + g.width, 1911, "reaches the output's right gap");
+    s.check_consistent();
+}
+
+#[test]
+fn maximize_window_to_edges_covers_the_workspace() {
+    let (mut s, mut sv) = two_windows();
+    let neighbour = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+
+    dispatch(&mut s, &mut sv, KeybindingAction::MaximizeWindowToEdges);
+    let windows = &s.state.wm.outputs[0].workspace_list[0].window_list;
+    assert_eq!(windows[1].geom.current.width, 1920, "fills the width");
+    assert_eq!(windows[1].geom.current.height, 1080, "and the height");
+    assert_eq!(
+        windows[0].geom.current, neighbour,
+        "the neighbour keeps its column"
+    );
+    assert_eq!(windows[1].geom.current.x, 0, "covers the workspace area");
+}
+
+#[test]
+fn focus_output_next_and_previous_cycle_the_monitors() {
+    let (mut s, mut sv) = scene();
+    assert_eq!(s.state.wm.focused_output_idx, Some(1));
+
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusOutputNext);
+    assert_eq!(s.state.wm.focused_output_idx, Some(0));
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusOutputNext);
+    assert_eq!(s.state.wm.focused_output_idx, Some(1), "wraps around");
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusOutputPrevious);
+    assert_eq!(s.state.wm.focused_output_idx, Some(0));
+}
+
+/// Moving a workspace to another output exchanges the two slots and follows
+/// the workspace, so the windows travel with it.
+#[test]
+fn move_workspace_to_output_swaps_with_the_target() {
+    let (mut s, mut sv) = scene();
+    let a_windows = s.state.wm.outputs[0].workspace_list[0].window_list.len();
+    let b_windows = s.state.wm.outputs[1].workspace_list[0].window_list.len();
+    assert_eq!(a_windows, 2);
+    assert_eq!(b_windows, 1);
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusOutputLeft);
+    assert_eq!(s.state.wm.focused_output_idx, Some(0));
+
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::MoveWorkspaceToOutputRight,
+    );
+    assert_eq!(
+        s.state.wm.focused_output_idx,
+        Some(1),
+        "the workspace is followed to its new output"
+    );
+    assert_eq!(s.state.wm.outputs[0].workspace_list[0].window_list.len(), 1);
+    assert_eq!(s.state.wm.outputs[1].workspace_list[0].window_list.len(), 2);
+    s.check_consistent();
+}
+
+/// `focus_workspace_name` and `move_window_to_workspace_name` resolve through
+/// `[[workspace]]`; the scene declares "chat" on slot 3.
+#[test]
+fn named_workspace_actions_resolve_the_slot() {
+    let (mut s, mut sv) = scene();
+    dispatch(&mut s, &mut sv, KeybindingAction::FocusOutputLeft);
+    let before = s.state.wm.outputs[0].workspace_list[0].window_list.len();
+
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::MoveWindowToWorkspaceName("chat".into()),
+    );
+    assert_eq!(
+        s.state.wm.outputs[0].workspace_list[2].window_list.len(),
+        1,
+        "the window landed on the named workspace"
+    );
+    assert_eq!(
+        s.state.wm.outputs[0].workspace_list[0].window_list.len(),
+        before - 1,
+        "and left the focused one"
+    );
+
+    dispatch(
+        &mut s,
+        &mut sv,
+        KeybindingAction::FocusWorkspaceName("chat".into()),
+    );
+    assert_eq!(s.state.wm.outputs[0].focused_workspace_idx, 2);
     s.check_consistent();
 }

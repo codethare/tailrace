@@ -649,3 +649,70 @@ fn scrolled_window_clips_with_set_clip_box_not_content_clip() {
         );
     }
 }
+
+/// A client that cannot shrink below its own minimum gets a wider slot instead
+/// of a proposal it will refuse: river's `dimensions_hint` reaches the layout,
+/// and the bound sent back never undercuts the client's minimum.
+#[test]
+fn a_client_minimum_width_widens_the_slot() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let win = s.add_pending_window(&mut sv);
+    s.send(
+        &mut sv,
+        win.clone(),
+        EVT_WIN_DIMENSIONS_HINT,
+        vec![
+            Argument::Int(1200),
+            Argument::Int(0),
+            Argument::Int(0),
+            Argument::Int(0),
+        ],
+    );
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let geom = s.state.wm.outputs[0].workspace_list[0].window_list[0]
+        .geom
+        .current;
+    // 1200 of content plus a 3px border on each side, instead of the 0.5
+    // proportion of the output the window asked for neither.
+    assert_eq!(geom.width, 1206);
+
+    assert_eq!(
+        dimension_bounds(&sv, &win),
+        vec![format!("i{},i{}", 1200, geom.height - 6)],
+        "the bound follows the client's minimum, not the slot it used to have"
+    );
+}
+
+/// A dialog (a window with a parent) is floated, so it does not take a column
+/// of its own.
+#[test]
+fn a_window_with_a_parent_floats() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let parent = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    let dialog = s.add_pending_window(&mut sv);
+    s.send(
+        &mut sv,
+        dialog.clone(),
+        EVT_WIN_PARENT,
+        vec![Argument::Object(parent)],
+    );
+    s.map_window(&mut sv, &dialog);
+    s.manage(&mut sv);
+
+    let windows = &s.state.wm.outputs[0].workspace_list[0].window_list;
+    assert_eq!(windows.len(), 2);
+    assert!(windows[1].geom.is_floating, "the dialog floats");
+    assert!(!windows[0].geom.is_floating, "its parent stays tiled");
+}

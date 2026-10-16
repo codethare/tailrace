@@ -72,6 +72,12 @@ pub fn update(wm: &mut WindowManager) {
             // decision, so an unrelated pass (a new window, an output event, a
             // config reload) cannot un-center the window afterwards.
             if workspace.focused_window_idx != workspace.previous_focused_window_idx {
+                // The focus left a window: remember which one, by identity, for
+                // `focus_window_previous`.
+                workspace.last_focused_window = workspace
+                    .previous_focused_window_idx
+                    .and_then(|idx| workspace.window_list.get(idx))
+                    .map(|window| window.river_window.clone());
                 workspace.on_overflow_center = scroller::overflows(
                     &geoms,
                     workspace.focused_window_idx,
@@ -80,11 +86,16 @@ pub fn update(wm: &mut WindowManager) {
                     &config,
                 );
                 workspace.previous_focused_window_idx = workspace.focused_window_idx;
+                // A latch belongs to the window that asked for it.
+                workspace.center_latch = false;
             }
             scroller::apply(
                 &mut geoms,
                 workspace.focused_window_idx,
-                workspace.on_overflow_center,
+                scroller::CenterState {
+                    on_overflow: workspace.on_overflow_center,
+                    latch: workspace.center_latch,
+                },
                 output.rectangle,
                 output.non_exclusive,
                 &config,

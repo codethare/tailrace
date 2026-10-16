@@ -67,9 +67,11 @@ const EVT_OUT_DIMENSIONS: u16 = 3;
 // dimensions=2, app_id=3, ... fullscreen_requested=12, exit_fullscreen_requested=13,
 // ... capture_sessions=18, touch_move_requested=19, touch_resize_requested=20)
 const EVT_WIN_CLOSED: u16 = 0;
+const EVT_WIN_DIMENSIONS_HINT: u16 = 1;
 const EVT_WIN_DIMENSIONS: u16 = 2;
 const EVT_WIN_APP_ID: u16 = 3;
 const EVT_WIN_TITLE: u16 = 4;
+const EVT_WIN_PARENT: u16 = 5;
 const EVT_WIN_POINTER_MOVE_REQUESTED: u16 = 7;
 const EVT_WIN_POINTER_RESIZE_REQUESTED: u16 = 8;
 const EVT_WIN_FULLSCREEN_REQUESTED: u16 = 12;

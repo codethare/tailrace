@@ -10,10 +10,20 @@
 use crate::layout::common;
 use crate::types::{CenterFocused, Config, Rectangle, WindowGeom};
 
+/// The workspace's stored centering decisions, kept by `layout::update` and
+/// forgotten when the focus moves.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CenterState {
+    /// `center_focused_window = "on_overflow"` latched a center for this focus.
+    pub on_overflow: bool,
+    /// `center_column` asked for the focused window to be centered.
+    pub latch: bool,
+}
+
 pub fn apply(
     windows: &mut [WindowGeom],
     focused_window_idx: Option<usize>,
-    on_overflow_center: bool,
+    center: CenterState,
     output_rect: Rectangle,
     non_exclusive: Rectangle,
     config: &Config,
@@ -48,12 +58,14 @@ pub fn apply(
     // for the single-window fill and .single centering below.
     let tiled_count = windows.iter().filter(|w| !w.is_floating).count();
 
-    let should_center = match config.center_focused_window {
-        CenterFocused::Never => false,
-        CenterFocused::Always => true,
-        CenterFocused::Single => tiled_count == 1,
-        CenterFocused::OnOverflow => on_overflow_center,
-    };
+    let should_center = center.latch
+        || config.always_center_single_column && tiled_count == 1
+        || match config.center_focused_window {
+            CenterFocused::Never => false,
+            CenterFocused::Always => true,
+            CenterFocused::Single => tiled_count == 1,
+            CenterFocused::OnOverflow => center.on_overflow,
+        };
 
     let mut rectangle;
 
@@ -115,8 +127,7 @@ pub fn apply(
             return;
         };
 
-        let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
-        let width_with_gap = (base_width * windows[anchor_idx].proportion) as i32;
+        let width_with_gap = width_with_gap(&windows[anchor_idx], non_exclusive, config);
 
         rectangle = Rectangle {
             width: width_with_gap - config.horizontal_gap,
@@ -156,6 +167,16 @@ pub fn apply(
 
     if !should_center {
         snap_to_edge(windows, non_exclusive, config.horizontal_gap);
+    }
+
+    // Maximize-to-edges covers the workspace area, gaps included, without
+    // taking a wider slot: the neighbours keep their positions underneath.
+    for window in windows.iter_mut() {
+        if window.is_maximized_to_edges && !window.is_floating && !window.is_fullscreen {
+            let mut finish = non_exclusive;
+            finish.y += y_offset;
+            window.finish = Some(finish);
+        }
     }
 
     for window in windows.iter_mut() {
@@ -198,10 +219,29 @@ pub fn overflows(
 
     // Each width is computed with a gap folded in, so the pair plus the gaps
     // around and between them come to a single `horizontal_gap`.
-    let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
-    let neighbour_width = (base_width * neighbour.proportion) as i32;
-    let focused_width = (base_width * windows[focused_idx].proportion) as i32;
+    let neighbour_width = width_with_gap(neighbour, non_exclusive, config);
+    let focused_width = width_with_gap(&windows[focused_idx], non_exclusive, config);
     neighbour_width + focused_width + config.horizontal_gap > non_exclusive.width
+}
+
+/// Width of a window's slot with the gap folded into it (the caller subtracts
+/// the gap), clamped to the window's content bounds: a client that cannot
+/// shrink below its own minimum must not be squeezed into a narrower slot.
+fn width_with_gap(window: &WindowGeom, non_exclusive: Rectangle, config: &Config) -> i32 {
+    let gap = config.horizontal_gap;
+    let borders = 2 * config.border.width as i32;
+    let base_width = (non_exclusive.width - gap) as f32;
+    let width_with_gap = (base_width * window.proportion) as i32;
+
+    let content = width_with_gap - gap - borders;
+    let clamped = if content < window.bounds.min_width {
+        window.bounds.min_width
+    } else if window.bounds.max_width > 0 && content > window.bounds.max_width {
+        window.bounds.max_width
+    } else {
+        return width_with_gap;
+    };
+    clamped + gap + borders
 }
 
 fn focused_window_layout(
@@ -212,8 +252,7 @@ fn focused_window_layout(
     y_offset: i32,
     should_center: bool,
 ) -> Rectangle {
-    let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
-    let width_with_gap = (base_width * window.proportion) as i32;
+    let width_with_gap = width_with_gap(window, non_exclusive, config);
 
     let mut rectangle = Rectangle {
         width: width_with_gap - config.horizontal_gap,
@@ -251,8 +290,7 @@ fn unfocused_window_layout(
         rectangle.height = output_rect.height;
         rectangle.y = output_rect.y + y_offset;
     } else {
-        let base_width = (non_exclusive.width - config.horizontal_gap) as f32;
-        let width_with_gap = (base_width * window.proportion) as i32;
+        let width_with_gap = width_with_gap(window, non_exclusive, config);
 
         rectangle.width = width_with_gap - config.horizontal_gap;
         rectangle.height = non_exclusive.height - 2 * config.vertical_gap;
@@ -319,7 +357,15 @@ mod tests {
     };
 
     fn apply(windows: &mut [WindowGeom], focused: Option<usize>, config: &Config) {
-        super::apply(windows, focused, false, OUTPUT, NON_EXCLUSIVE, config, 0);
+        super::apply(
+            windows,
+            focused,
+            CenterState::default(),
+            OUTPUT,
+            NON_EXCLUSIVE,
+            config,
+            0,
+        );
     }
 
     /// Mirrors the coordinator's snap: settle windows at their finish.
@@ -453,7 +499,15 @@ mod tests {
             width: 1280,
             height: 720,
         };
-        super::apply(&mut windows, None, false, small, small, &config, 0);
+        super::apply(
+            &mut windows,
+            None,
+            CenterState::default(),
+            small,
+            small,
+            &config,
+            0,
+        );
 
         let finish = windows[0]
             .finish
@@ -564,5 +618,86 @@ mod tests {
             windows[0].finish.unwrap().x,
             (1920 - windows[0].finish.unwrap().width) / 2
         );
+    }
+
+    /// A client whose minimum width is wider than its slot gets a wider slot
+    /// instead of a proposal it will refuse: the neighbours move over.
+    #[test]
+    fn a_minimum_width_widens_the_slot() {
+        let config = Config::default();
+        let mut windows = vec![tiled(0.25), tiled(0.5)];
+        windows[0].bounds.min_width = 800;
+
+        apply(&mut windows, Some(0), &config);
+
+        let wide = windows[0].finish.unwrap();
+        // Content 800 plus the 3px borders on both sides.
+        assert_eq!(wide.width, 806);
+        // The next window starts after the widened slot, not over it.
+        assert_eq!(
+            windows[1].finish.unwrap().x,
+            wide.x + wide.width + config.horizontal_gap
+        );
+    }
+
+    /// The same slot, but bounded from above by a window rule.
+    #[test]
+    fn a_maximum_width_narrows_the_slot() {
+        let config = Config::default();
+        let mut windows = vec![tiled(0.5)];
+        windows[0].bounds.max_width = 400;
+
+        apply(&mut windows, Some(0), &config);
+        assert_eq!(windows[0].finish.unwrap().width, 406);
+    }
+
+    /// Maximize-to-edges fills the workspace area over the gaps without taking
+    /// a wider slot, so the neighbours stay where they were.
+    #[test]
+    fn maximize_to_edges_covers_the_workspace_without_moving_neighbours() {
+        let config = Config::default();
+        let mut windows = vec![tiled(0.5), tiled(0.5)];
+
+        apply(&mut windows, Some(0), &config);
+        let neighbour = windows[1].finish.unwrap();
+
+        windows[0].is_maximized_to_edges = true;
+        apply(&mut windows, Some(0), &config);
+
+        assert_eq!(windows[0].finish.unwrap(), NON_EXCLUSIVE);
+        assert_eq!(windows[1].finish.unwrap(), neighbour);
+    }
+
+    /// `center_column` centers the focused window whatever
+    /// `center_focused_window` says, and `always_center_single_column` centers
+    /// a lone window on a `never` workspace.
+    #[test]
+    fn centering_latch_and_single_column_override_the_config() {
+        let config = Config::default();
+        let mut windows = vec![tiled(0.5), tiled(0.5)];
+
+        super::apply(
+            &mut windows,
+            Some(0),
+            CenterState {
+                on_overflow: false,
+                latch: true,
+            },
+            OUTPUT,
+            NON_EXCLUSIVE,
+            &config,
+            0,
+        );
+        let finish = windows[0].finish.unwrap();
+        assert_eq!(finish.x, (1920 - finish.width) / 2);
+
+        let lonely = Config {
+            always_center_single_column: true,
+            ..Config::default()
+        };
+        let mut one = vec![tiled(0.5)];
+        apply(&mut one, Some(0), &lonely);
+        let finish = one[0].finish.unwrap();
+        assert_eq!(finish.x, (1920 - finish.width) / 2);
     }
 }

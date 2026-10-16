@@ -9,7 +9,9 @@ use crate::actions::PointerAction;
 use crate::app::AppData;
 use crate::layout::{self, common};
 use crate::river::river_window_v1::{self, RiverWindowV1};
-use crate::types::{PendingWindow, Status, Window, WindowGeom, WindowRule};
+use crate::types::{
+    ContentBounds, PendingWindow, Status, Window, WindowGeom, WindowRule, WorkspaceTarget,
+};
 use crate::wm::WindowManager;
 
 /// Handle a river_window_v1 event. Returns true when a manage sequence
@@ -45,6 +47,38 @@ pub fn window_event(
             for pending in &mut state.wm.pending_windows {
                 if &pending.river_window == river_window {
                     pending.capture_sessions = *count;
+                    break;
+                }
+            }
+        }
+        // The client's own limits arrive before `dimensions` maps it. Without
+        // them the layout would hand a window with a minimum width a slot
+        // narrower than it can render.
+        river_window_v1::Event::DimensionsHint {
+            min_width,
+            min_height,
+            max_width,
+            max_height,
+        } => {
+            for pending in &mut state.wm.pending_windows {
+                if &pending.river_window == river_window {
+                    pending.bounds = ContentBounds {
+                        min_width: *min_width,
+                        max_width: *max_width,
+                        min_height: *min_height,
+                        max_height: *max_height,
+                    };
+                    break;
+                }
+            }
+        }
+        // A window with a parent is a dialog or similar and is floated, like
+        // niri. River sends this with the rest of the pending state; a parent
+        // set after the window is mapped is ignored (rules are map-time too).
+        river_window_v1::Event::Parent { parent } => {
+            for pending in &mut state.wm.pending_windows {
+                if &pending.river_window == river_window {
+                    pending.has_parent = parent.is_some();
                     break;
                 }
             }
@@ -291,19 +325,30 @@ fn add_window(
         .iter()
         .filter(|rule| rule.matches(pending.app_id.as_deref(), pending.title.as_deref()))
         .collect();
-    let output_idx = matched
+    // A named workspace also pins its own output, below an explicit
+    // `open_on_output` rule.
+    let (name_output, target_slot) = match matched
+        .iter()
+        .find_map(|rule| rule.open_on_workspace.as_ref())
+    {
+        Some(WorkspaceTarget::Number(number)) => (None, Some(number - 1)),
+        Some(WorkspaceTarget::Name(name)) => config
+            .workspace_slot(name)
+            .map_or((None, None), |(output, slot)| (output, Some(slot))),
+        None => (None, None),
+    };
+    let output_name = matched
         .iter()
         .find_map(|rule| rule.open_on_output.as_deref())
+        .or(name_output);
+    let output_idx = output_name
         .and_then(|name| {
             wm.outputs
                 .iter()
                 .position(|o| o.name.as_deref() == Some(name))
         })
         .unwrap_or(focused_output_idx);
-    let ws_idx = matched
-        .iter()
-        .find_map(|rule| rule.open_on_workspace)
-        .map_or(wm.outputs[output_idx].focused_workspace_idx, |n| n - 1);
+    let ws_idx = target_slot.unwrap_or(wm.outputs[output_idx].focused_workspace_idx);
     let width = matched
         .iter()
         .find_map(|rule| rule.default_window_width)
@@ -319,7 +364,7 @@ fn add_window(
         w.geom.former_output_name = None;
     }
 
-    let is_floating = matched.iter().any(|rule| rule.floating);
+    let is_floating = matched.iter().any(|rule| rule.floating) || pending.has_parent;
 
     // New windows start just off the right edge (or at the centered floating
     // rect) so the first manage pass moves them into place.
@@ -338,6 +383,14 @@ fn add_window(
     geom.is_floating = is_floating;
     geom.floating = floating_rect;
     geom.capture_sessions = pending.capture_sessions;
+    // The client's hint, overridden by rules where they say so.
+    geom.bounds = pending.bounds;
+    if let Some(min) = matched.iter().find_map(|rule| rule.min_width) {
+        geom.bounds.min_width = min;
+    }
+    if let Some(max) = matched.iter().find_map(|rule| rule.max_width) {
+        geom.bounds.max_width = max;
+    }
     let window = Window {
         river_window: pending.river_window,
         river_node,

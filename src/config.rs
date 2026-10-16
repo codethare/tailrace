@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde::de::Error as _;
 
+use crate::actions::KeybindingAction;
 use crate::keybinding::{default_keybindings, default_pointer_bindings};
-use crate::types::Config;
+use crate::types::{Config, WorkspaceTarget};
 
 /// Candidate config paths, in order: `$XDG_CONFIG_HOME/tailrace/config.toml`,
 /// `$HOME/.config/tailrace/config.toml`.
@@ -37,11 +38,52 @@ fn parse(content: &str) -> Result<Config, toml::de::Error> {
     // (`focus_workspace_number`), so a rule outside that range is a typo, not a
     // request to fall back to the focused workspace.
     for (idx, rule) in config.window_rules.iter().enumerate() {
-        if let Some(number) = rule.open_on_workspace
+        if let Some(WorkspaceTarget::Number(number)) = rule.open_on_workspace
             && !(1..=10).contains(&number)
         {
             return Err(toml::de::Error::custom(format!(
                 "window_rules[{idx}].open_on_workspace = {number} is out of range (1-10)"
+            )));
+        }
+    }
+    // A workspace name is only meaningful once `[[workspace]]` declares it, so
+    // a name that nothing defines (a typo, or a renamed workspace) is an error
+    // in a rule or a binding rather than a silent no-op.
+    for (idx, workspace) in config.workspace.iter().enumerate() {
+        if !(1..=10).contains(&workspace.slot) {
+            return Err(toml::de::Error::custom(format!(
+                "workspace[{idx}].slot = {} is out of range (1-10)",
+                workspace.slot
+            )));
+        }
+        if config.workspace[..idx]
+            .iter()
+            .any(|other| other.name == workspace.name)
+        {
+            return Err(toml::de::Error::custom(format!(
+                "workspace[{idx}].name = \"{}\" is declared twice",
+                workspace.name
+            )));
+        }
+    }
+    for (idx, rule) in config.window_rules.iter().enumerate() {
+        if let Some(WorkspaceTarget::Name(name)) = &rule.open_on_workspace
+            && config.workspace.iter().all(|w| &w.name != name)
+        {
+            return Err(toml::de::Error::custom(format!(
+                "window_rules[{idx}].open_on_workspace = \"{name}\" is not a declared workspace"
+            )));
+        }
+    }
+    for (idx, binding) in config.keybindings.iter().enumerate() {
+        let name = match &binding.action {
+            KeybindingAction::FocusWorkspaceName(name)
+            | KeybindingAction::MoveWindowToWorkspaceName(name) => name,
+            _ => continue,
+        };
+        if config.workspace.iter().all(|w| &w.name != name) {
+            return Err(toml::de::Error::custom(format!(
+                "keybindings[{idx}] refers to \"{name}\", which `[[workspace]]` does not declare"
             )));
         }
     }
@@ -168,6 +210,47 @@ mod tests {
         assert!(parse(&rule(11)).is_err());
         assert!(parse(&rule(1)).is_ok());
         assert!(parse(&rule(10)).is_ok());
+    }
+
+    /// Workspace names are declared by `[[workspace]]`; a binding or a rule
+    /// that names an undeclared one is a typo (or a renamed workspace) and must
+    /// be loud rather than a silent no-op.
+    #[test]
+    fn workspaces_are_validated() {
+        let declare = "[[workspace]]\nname = \"chat\"\nslot = 3\n";
+        assert!(parse(declare).is_ok());
+        assert!(parse("[[workspace]]\nname = \"chat\"\nslot = 11\n").is_err());
+        assert!(
+            parse("[[workspace]]\nname = \"chat\"\n").is_err(),
+            "slot is required"
+        );
+        assert!(
+            parse(&format!("{declare}{declare}")).is_err(),
+            "a name may only be declared once"
+        );
+        assert!(
+            parse(&format!(
+                "{declare}[[keybindings]]\nkey = \"x\"\nmodifiers = []\naction = {{ focus_workspace_name = \"chat\" }}\n"
+            ))
+            .is_ok()
+        );
+        assert!(
+            parse("[[keybindings]]\nkey = \"x\"\nmodifiers = []\naction = {{ focus_workspace_name = \"cht\" }}\n")
+                .is_err(),
+            "an undeclared binding name"
+        );
+        assert!(
+            parse("[[window_rules]]\napp_id = \"x\"\nopen_on_workspace = \"cht\"\n").is_err(),
+            "an undeclared rule name"
+        );
+        assert!(
+            parse(&format!(
+                "{declare}[[window_rules]]\napp_id = \"x\"\nopen_on_workspace = \"chat\"\n"
+            ))
+            .is_ok()
+        );
+        // A number still means a slot number.
+        assert!(parse("[[window_rules]]\napp_id = \"x\"\nopen_on_workspace = 3\n").is_ok());
     }
 
     /// The shipped example must parse against the schema and must not change

@@ -46,9 +46,14 @@ with `render_finish`.
 ## Layout pipeline
 
 1. `layout::update` recomputes every window's `geom.finish` from the workspace
-   layout (`layout::scroller`), clamping floats into the output. Fullscreen
-   wins over everything: the focused one is handed to the compositor
+   layout (`layout::scroller`), clamping floats into the output. The slot width
+   comes from `proportion`, then clamps to the window's content bounds
+   (`dimensions_hint`, overridden by `min_width`/`max_width` rules), so a client
+   that cannot shrink keeps a wider column and its neighbours move over.
+   Fullscreen wins over everything: the focused one is handed to the compositor
    (`river_window_v1.fullscreen`) which then owns its geometry and clipping.
+   Maximize-to-edges covers `non_exclusive` without widening the slot, so its
+   neighbours stay put underneath it.
 2. `layout::apply` handles pending windows, removed outputs (migrate or
    detach) and restored outputs, then `apply_focus_and_borders`.
 3. `layout::snap_to_finish` sets `current = finish` and issues the protocol
@@ -122,6 +127,12 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
   `previous_focused_window_idx`. Re-deciding on a later pass (an added window,
   an output event, a no-op action) reads "no previous focus" and drags the
   window back out of center.
+- **Centering and previous-focus state are maintained by `layout::update`.**
+  `center_latch` (niri's `center_column`) and `last_focused_window`
+  (`focus_window_previous`) are cleared or retaken only in the pass that sees
+  `focused_window_idx` differ from `previous_focused_window_idx`. A dispatch
+  arm that changes the focus must not touch them: the state means "where the
+  focus came from", and the arm does not know that.
 - **rill-ed is the reference implementation.** When behaviour looks wrong,
   compare with `src/` in rill-ed (`animation.zig` ↔ `snap_to_finish`,
   `layout.zig` ↔ `layout/`); two bugs in tailrace were single dropped lines from

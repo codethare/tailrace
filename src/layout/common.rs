@@ -197,8 +197,12 @@ fn propose_dimensions(river_window: &RiverWindowV1, geom: &mut WindowGeom, borde
     }
     river_window.propose_dimensions(content.0, content.1);
     // The same size as an explicit bound: windows that ignore the proposal
-    // should still not grow past their slot.
-    river_window.set_dimension_bounds(content.0, content.1);
+    // should still not grow past their slot — but never below the client's own
+    // minimum, which it would refuse to shrink to.
+    river_window.set_dimension_bounds(
+        content.0.max(geom.bounds.min_width),
+        content.1.max(geom.bounds.min_height),
+    );
     geom.sent_dimensions = Some(content);
 }
 
@@ -211,7 +215,7 @@ pub fn place_window(
     output_rect: Rectangle,
     config: &Config,
 ) {
-    let border_width = if geom.is_fullscreen {
+    let border_width = if geom.is_fullscreen || geom.is_maximized_to_edges {
         0
     } else {
         config.border.width as i32

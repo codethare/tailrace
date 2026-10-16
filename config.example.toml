@@ -11,6 +11,21 @@ default_window_width = 0.5
 # Center the focused window (never, always, single, on_overflow)
 center_focused_window = "never"
 
+# Center a workspace holding a single window, whatever center_focused_window says
+# always_center_single_column = false
+
+# Widths switch_preset_column_width cycles through. Defaults are 1/3, 1/2 and
+# 2/3 of the output; each entry is a proportion of the output or fixed pixels.
+# preset_column_widths = [{ proportion = 0.33333 }, { fixed = 1280 }]
+
+# Names for workspaces, so bindings and rules can refer to them by name instead
+# of a number. `output` is optional; the name resolves on the focused output
+# when it is omitted.
+# [[workspace]]
+# name = "chat"
+# slot = 3
+# output = "DP-2"
+
 # Focus the window under the mouse pointer (sloppy focus)
 focus_follows_pointer = false
 
@@ -32,10 +47,12 @@ unfocused_color = { r = 160, g = 160, b = 160, a = 1.0 }
 
 # Rules matching windows by exact app_id and/or glob title (`*`, `?`).
 # All set fields must match. Matched windows can be floated, opened on a given
-# workspace number (1-10) or output name, and opened at a given width. For each
-# of those the first matching rule that sets it wins. Evaluated when a window
-# is first mapped: reloading the config does not re-evaluate rules for windows
-# that are already open.
+# workspace (a number 1-10 or a [[workspace]] name) or output name, opened at a
+# given width, and given minimum/maximum content widths in pixels (which
+# override the size hint the client itself sends). For each of those the first
+# matching rule that sets it wins. Evaluated when a window is first mapped:
+# reloading the config does not re-evaluate rules for windows that are already
+# open.
 # [[window_rules]]
 # app_id = "footclient"
 # floating = true
@@ -49,6 +66,10 @@ unfocused_color = { r = 160, g = 160, b = 160, a = 1.0 }
 # [[window_rules]]
 # app_id = "firefox"
 # open_on_output = "HDMI-A-1"
+# min_width = 800
+# [[window_rules]]
+# app_id = "signal"
+# open_on_workspace = "chat"
 
 # Keybindings. A present [[keybindings]] section REPLACES the built-in
 # defaults as a whole - it does not merge - so either list every binding you
@@ -81,6 +102,16 @@ unfocused_color = { r = 160, g = 160, b = 160, a = 1.0 }
 # key = "1"
 # modifiers = ["mod4"]
 # action = { focus_workspace_number = 1 }
+#
+# [[keybindings]]
+# key = "g"
+# modifiers = ["mod4"]
+# action = { focus_workspace_name = "chat" }
+#
+# [[keybindings]]
+# key = "h"
+# modifiers = ["mod4", "shift"]
+# action = "move_workspace_to_output_left"
 #
 # Bare keys (no modifiers) only fire while the overview is open:
 # [[keybindings]]
