@@ -183,8 +183,13 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         }
 
         // When the last output is removed, the previously focused window
-        // proxy is no longer meaningful.
+        // proxy is no longer meaningful to the focus code, but it is the
+        // window to return to: keep it so that coming back from a suspend or a
+        // TTY switch lands on the window the user was using.
         if wm.focused_output_idx.is_none() {
+            if wm.resume_focus.is_none() {
+                wm.resume_focus = wm.last_focused_window.clone();
+            }
             wm.last_focused_window = None;
             wm.previous_workspace = None;
         }
@@ -261,6 +266,25 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
     }
 
     if needs_update || restored_any {
+        // Follow the window that was in use: an output going away or coming
+        // back must not leave the view on a workspace the user's window is not
+        // on, where the returned windows sit off-screen and keyboard focus has
+        // nothing to move from. The window is the one that had focus when its
+        // output went away (`resume_focus`, across manage passes) or the one
+        // focused now (`last_focused_window`, same pass).
+        if let Some(focus) = wm
+            .last_focused_window
+            .clone()
+            .or_else(|| wm.resume_focus.clone())
+            && let Some((output_idx, workspace_idx, _)) = wm.locate_window(&focus)
+        {
+            wm.outputs[output_idx].focused_workspace_idx = workspace_idx;
+        }
+        // Once windows have come back the capture has served its purpose;
+        // until then it has to survive for the pass that restores them.
+        if restored_any {
+            wm.resume_focus = None;
+        }
         update(wm);
     }
 

@@ -43,6 +43,10 @@ pub struct WindowManager {
     /// avoid sending redundant focus/clear_focus requests, which break input
     /// method clients (fcitx5) on every layout cycle.
     pub last_focused_window: Option<RiverWindowV1>,
+    /// Window that had focus when every output went away (suspend, TTY
+    /// switch): the window to return to when the outputs come back, whatever
+    /// workspace the output that reappears was showing.
+    pub resume_focus: Option<RiverWindowV1>,
     pub layer_shell_focus: LayerShellFocus,
     /// True when the compositor has sent session_locked.
     pub session_locked: bool,
@@ -68,6 +72,7 @@ impl WindowManager {
             needs_setup_bindings: false,
             should_exit_loop: false,
             last_focused_window: None,
+            resume_focus: None,
             layer_shell_focus: LayerShellFocus::None,
             session_locked: false,
             lock_focus: None,
