@@ -13,7 +13,8 @@ document is the map for changing it; `README.md` covers user-facing behaviour.
 
 | File | Contents |
 |---|---|
-| `main.rs` | Arguments, the Wayland connection and the event loop |
+| `main.rs` | Arguments, the Wayland connection and the event loop (a `poll` on the compositor fd and the control socket) |
+| `ctl.rs` | Control socket: window snapshot, the `focus` verb, socket permissions and the uid check |
 | `app.rs` | `AppData` (protocol globals + binding lists), registry binds, `manage()` |
 | `wm.rs`, `types.rs` | Derived state: outputs, workspaces, windows, status, config |
 | `window.rs`, `output.rs`, `seat.rs` | Event handlers for the three river global objects |
@@ -96,7 +97,8 @@ log. Helpers: `add_output`, `add_pending_window` + `map_window`,
 `add_window`, `add_wl_seat`, `manage`, `config_mut`, plus `children_with_interface`,
 `count_requests` and `requests_for` for assertions. Each scenario module
 (`outputs.rs`, `seats.rs`, `pointer.rs`, `windows.rs`, `manage.rs`,
-`overview.rs`, `keybindings.rs`, `cursor.rs`, `rules.rs`) covers one area.
+`overview.rs`, `keybindings.rs`, `cursor.rs`, `rules.rs`, `mru.rs`, `ctl.rs`)
+covers one area.
 
 Limits: there is no compositor, so requests are recorded rather than executed,
 nothing is rendered, and protocol errors only surface as panics inside the
@@ -104,6 +106,14 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
 
 ## Traps worth knowing
 
+- **The control socket is the second fd in the loop.** `main` polls the
+  compositor and the listener together; the listener is non-blocking and every
+  connection is one-shot (read a bounded line, write once, close), because a
+  slow client must never stall input. Verbs are a whitelist in
+  `ctl::handle_line` — `focus` reuses `keybinding::focus_window_id`, so the
+  socket cannot reach `dispatch_action` and therefore cannot spawn anything.
+  MRU order is maintained by `layout::apply_focus_and_borders` alone; the
+  socket and the `cycle_focus_*` actions only read it.
 - **Seats are per seat, not global.** river creates seats at runtime
   (ext-transient-seat-v1: a remote-desktop or VM session), so `AppData.seats`
   holds one `SeatState` per `river_seat_v1` — its bindings, `wl_seat`,

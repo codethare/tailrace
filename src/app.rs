@@ -214,6 +214,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppData {
                     capture_sessions: 0,
                     bounds: crate::types::ContentBounds::default(),
                     has_parent: false,
+                    identifier: None,
                 });
                 state.wm.status = Status::Layout;
             }

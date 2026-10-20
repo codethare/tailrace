@@ -15,6 +15,19 @@ use crate::types::{
     Workspace,
 };
 
+/// How many windows the MRU list remembers. A window closes rarely enough that
+/// the list never grows past the number of open windows, but a cap keeps a
+/// long session bounded.
+const MRU_LIMIT: usize = 64;
+
+/// A `cycle_focus_*` session: the MRU order frozen when the cycle started, so
+/// every press moves one step in the same order even though focusing a window
+/// reorders the live list.
+pub struct MruCycle {
+    pub order: Vec<String>,
+    pub index: usize,
+}
+
 /// Layer-shell keyboard focus state of one seat. Per seat, because a layer
 /// surface grabs keyboard focus on the seat it is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,6 +65,12 @@ pub struct WindowManager {
     /// Set when the focused output changed because an output was
     /// added/removed; the next layout pass warps the pointer.
     pub needs_pointer_warp: bool,
+    /// Window identifiers in most-recently-used order; the front is the focused
+    /// window. Maintained by `layout::apply_focus_and_borders`, the one place a
+    /// focus change is committed.
+    pub mru: Vec<String>,
+    /// Set while `cycle_focus_next`/`_prev` walks the list.
+    pub mru_cycle: Option<MruCycle>,
 }
 
 impl WindowManager {
@@ -72,6 +91,8 @@ impl WindowManager {
             session_locked: false,
             lock_focus: None,
             needs_pointer_warp: false,
+            mru: Vec::new(),
+            mru_cycle: None,
         }
     }
 
@@ -173,6 +194,52 @@ impl WindowManager {
         let ws = self.workspace_mut(source.0, source.1).unwrap();
         ws.window_list = source_list;
         ws.focused_window_idx = source_focus;
+    }
+
+    /// Locate a window by river's stable identifier.
+    pub fn locate_window_id(&self, id: &str) -> Option<(usize, usize, usize)> {
+        for (output_idx, output) in self.outputs.iter().enumerate() {
+            for (workspace_idx, workspace) in output.workspace_list.iter().enumerate() {
+                if let Some(window_idx) = workspace
+                    .window_list
+                    .iter()
+                    .position(|w| w.identifier.as_deref() == Some(id))
+                {
+                    return Some((output_idx, workspace_idx, window_idx));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn window_by_id(&self, id: &str) -> Option<&Window> {
+        let (output_idx, workspace_idx, window_idx) = self.locate_window_id(id)?;
+        self.outputs[output_idx].workspace_list[workspace_idx]
+            .window_list
+            .get(window_idx)
+    }
+
+    /// Make `id` the most recently used window. Called for the window a focus
+    /// pass commits, which is the only way focus changes.
+    pub fn mru_promote(&mut self, id: &str) {
+        if self.mru.first().is_some_and(|front| front == id) {
+            return;
+        }
+        self.mru.retain(|other| other != id);
+        self.mru.insert(0, id.to_string());
+        self.mru.truncate(MRU_LIMIT);
+    }
+
+    /// Forget a window that closed. A cycle in progress is dropped rather than
+    /// patched: its frozen order would otherwise point at a window that is
+    /// gone, and the next cycle is one keypress away.
+    pub fn mru_remove(&mut self, id: &str) {
+        self.mru.retain(|other| other != id);
+        if let Some(cycle) = &self.mru_cycle
+            && cycle.order.iter().any(|other| other == id)
+        {
+            self.mru_cycle = None;
+        }
     }
 
     /// Sticky windows follow the focused workspace of their output. An

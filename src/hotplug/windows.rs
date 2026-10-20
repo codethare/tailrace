@@ -716,3 +716,66 @@ fn a_window_with_a_parent_floats() {
     assert!(windows[1].geom.is_floating, "the dialog floats");
     assert!(!windows[0].geom.is_floating, "its parent stays tiled");
 }
+
+/// The window list the control socket prints needs names: identifier, app_id
+/// and title are sent before `dimensions` and have to survive mapping.
+#[test]
+fn a_window_keeps_its_identifier_and_names() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+
+    let win = s.add_pending_window(&mut sv);
+    for (opcode, value) in [
+        (EVT_WIN_IDENTIFIER, "7"),
+        (EVT_WIN_APP_ID, "foot"),
+        (EVT_WIN_TITLE, "~/src"),
+    ] {
+        s.send(
+            &mut sv,
+            win.clone(),
+            opcode,
+            vec![Argument::Str(Some(Box::new(CString::new(value).unwrap())))],
+        );
+    }
+    s.map_window(&mut sv, &win);
+    s.manage(&mut sv);
+
+    let window = &s.state.wm.outputs[0].workspace_list[0].window_list[0];
+    assert_eq!(window.identifier.as_deref(), Some("7"));
+    assert_eq!(window.app_id.as_deref(), Some("foot"));
+    assert_eq!(window.title.as_deref(), Some("~/src"));
+}
+
+/// A title set after the window is mapped (a browser tab, `less` inside a
+/// terminal) is kept too: rules only ever look at the pending state, but the
+/// window list shows the current title.
+#[test]
+fn a_title_change_after_mapping_is_kept() {
+    let (mut s, mut sv) = build();
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    s.add_output(&mut sv, "A", (0, 0), (1920, 1080));
+    s.manage(&mut sv);
+    let win = s.add_window(&mut sv);
+    s.manage(&mut sv);
+
+    s.send(
+        &mut sv,
+        win,
+        EVT_WIN_TITLE,
+        vec![Argument::Str(Some(Box::new(
+            CString::new("later").unwrap(),
+        )))],
+    );
+
+    let window = &s.state.wm.outputs[0].workspace_list[0].window_list[0];
+    assert_eq!(window.title.as_deref(), Some("later"));
+    assert_eq!(
+        s.state.wm.status,
+        crate::types::Status::None,
+        "a title has nothing to commit to river"
+    );
+}

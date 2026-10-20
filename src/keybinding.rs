@@ -7,7 +7,7 @@ mod defaults;
 mod dispatch;
 
 pub use defaults::{default_keybindings, default_pointer_bindings};
-pub use dispatch::dispatch_action;
+pub use dispatch::{dispatch_action, focus_window_id};
 
 /// Parse modifier names (shift, ctrl, mod1, mod3, mod4, mod5) into the
 /// river `Modifiers` bitfield. Returns the offending name on error.

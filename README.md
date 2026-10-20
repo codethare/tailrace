@@ -21,6 +21,9 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 * Clients are told tailrace only supports fullscreen, so no dead maximize/minimize buttons
 * 10 workspaces per output
 * Overview mode: grid of all windows across outputs/workspaces, vi-key navigation
+* Most-recently-used window switching (`Alt+Tab`), across outputs and workspaces
+* Control socket for menus and scripts: `tailrace ctl windows` lists windows
+  most recently used first, `tailrace ctl focus <id>` switches to one
 * Live-reloading TOML config
 * Multi-output with window migration (windows return to their output when it reappears)
 * Multiple seats: a seat created at runtime for a remote-desktop or VM session
@@ -59,6 +62,37 @@ River `main`; the v0.4.8 release only provides v5). tailrace also binds
 tailrace itself takes `-c/--config <path>` to read a specific config file,
 `--check-config` to parse the config, report any error and exit without
 starting, `--help` and `--version`.
+
+## Control socket
+
+A running tailrace listens on `$XDG_RUNTIME_DIR/tailrace/ctl.sock` — directory
+0700, socket 0600, and the peer's uid is checked — so a menu or script can read
+the window list and switch to one:
+
+```sh
+tailrace ctl windows     # one line per window, most recently used first
+tailrace ctl focus <id>  # focus that window, wherever it lives
+```
+
+`windows` writes one tab-separated line per window:
+
+```
+id <TAB> title <TAB> app_id <TAB> output:workspace <TAB> flags
+```
+
+`-` stands for an empty field; flags are `focused`, `floating`, `fullscreen`,
+`maximized`, `sticky`, `closing`, comma separated. `id` is river's window
+identifier: unique and never reused, so a menu that holds an id cannot hit a
+different window once the first one closes. Tabs and newlines inside a title are
+replaced by spaces, so one window is always one line.
+
+`focus` is the only write verb: there is no way to run a program or an arbitrary
+action over the socket. An unknown id is an error, and focusing the window that
+already has focus is not one.
+
+A request is one line and is answered once; then the connection closes. tailrace
+never waits for a client: an unfinished or oversized request is answered as far
+as it goes and the connection is dropped.
 
 ## Configuration
 
@@ -106,7 +140,8 @@ focused output), `default_window_width` (a proportion of the output, as at the
 top level) and `min_width` / `max_width` (content pixels, overriding the
 client's own size hint). For each field the first matching rule that sets it
 wins; `floating` is an any-match. A value outside 1-10 for a number
-`open_on_workspace`, or a workspace name nothing declares, is a parse error.
+`open_on_workspace`, a workspace name nothing declares, or a `min_width`
+greater than the `max_width` beside it is a parse error.
 
 Rules are evaluated when a window is first mapped, so `Super+r` does not
 re-evaluate them for already-open windows (matching rill-ed) — a window you
@@ -139,6 +174,8 @@ floated by hand stays floated.
 | `Super` `h`/`j`/`k`/`l` | Focus output left/below/above/right |
 | `Super` `comma` / `period` | Focus previous / next output |
 | `Super` `Tab` | Focus the previously focused window |
+| `Super` `Shift` `Tab` | Focus the most recently used window (any output, any workspace) |
+| `Alt` `Tab` / `Alt` `Shift` `Tab` | Cycle through the most recently used windows |
 | `Super` `Shift` `h`/`j`/`k`/`l` | Move window to output left/below/above/right |
 | `Super` `Escape` | Exit river |
 | `Super` `Space` | Enter overview |

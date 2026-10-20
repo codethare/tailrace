@@ -7,6 +7,7 @@
 mod actions;
 mod app;
 mod config;
+mod ctl;
 mod keybinding;
 mod layout;
 mod output;
@@ -30,6 +31,8 @@ const USAGE: &str = "\
 tailrace - tiny scrolling window manager for river
 
 usage: tailrace [-c <path>] [--check-config]
+       tailrace ctl windows
+       tailrace ctl focus <id>
 
 options:
   -c, --config <path>  read this file instead of searching
@@ -37,11 +40,18 @@ options:
   --check-config       parse the config, report errors and exit
   -h, --help           print this help and exit
   -V, --version        print the version and exit
+
+ctl talks to the running window manager over $XDG_RUNTIME_DIR/tailrace/ctl.sock:
+  windows              one line per window, most recently used first
+  focus <id>           focus the window with that id
 ";
 
 struct Args {
     config: Option<std::path::PathBuf>,
     check_config: bool,
+    /// Words after `ctl`: a client request instead of starting the window
+    /// manager.
+    ctl: Option<Vec<String>>,
 }
 
 /// Prints help/version and returns None when the process should exit early.
@@ -52,8 +62,15 @@ fn parse_args() -> Result<Option<Args>, String> {
 fn parse_args_from<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Args>, String> {
     let mut config = None;
     let mut check_config = false;
+    let mut ctl = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            // Everything after `ctl` is the request, so the config flags cannot
+            // be mixed in with it.
+            "ctl" => {
+                ctl = Some(args.by_ref().collect());
+                break;
+            }
             "-c" | "--config" => {
                 let Some(path) = args.next() else {
                     return Err(format!("{arg} needs a path"));
@@ -75,6 +92,7 @@ fn parse_args_from<I: Iterator<Item = String>>(mut args: I) -> Result<Option<Arg
     Ok(Some(Args {
         config,
         check_config,
+        ctl,
     }))
 }
 
@@ -87,6 +105,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
     };
+    // `ctl` talks to a running window manager: no Wayland connection, no
+    // config.
+    if let Some(request) = &args.ctl {
+        if request.is_empty() {
+            eprintln!("tailrace: usage: tailrace ctl <windows|focus <id>>");
+            std::process::exit(2);
+        }
+        match ctl::run_client(&request.join(" ")) {
+            Ok(reply) => {
+                print!("{reply}");
+                if reply.starts_with("error:") {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            Err(message) => {
+                eprintln!("tailrace: {message}");
+                std::process::exit(1);
+            }
+        }
+    }
     // Loaded before the Wayland connection so `--check-config` works without
     // a compositor. Config errors are reported through `Display` (the toml
     // error names the line), not as a nested io::Error Debug.
@@ -159,19 +198,87 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("tailrace: river_layer_shell_v1 missing, layer-shell focus tracking disabled");
     }
 
-    // Don't pass WAYLAND_DEBUG on to children; the added noise makes
-    // debugging spawned programs impractical (tailrace itself may be debugged
-    // with it).
+    // Listen before the loop: a menu started by `spawn_at_startup` must already
+    // find the socket.
+    let listener = match ctl::socket_path() {
+        Some(path) => match ctl::bind_listener(&path) {
+            Ok(listener) => Some(listener),
+            Err(e) => {
+                // Not fatal: the window manager still works without a menu.
+                eprintln!("tailrace: cannot open the control socket: {e}");
+                None
+            }
+        },
+        None => {
+            eprintln!("tailrace: XDG_RUNTIME_DIR is not set, control socket disabled");
+            None
+        }
+    };
+
     for command in state.wm.config.spawn_at_startup.clone() {
         if let Err(e) = spawn::spawn_detached(&command) {
             eprintln!("tailrace: cannot run spawn_at_startup {command:?}: {e}");
         }
     }
 
+    // Two fds: the compositor and the control socket. Polling both is what lets
+    // a menu talk to us without blocking input; a poll on one fd is the old
+    // `blocking_dispatch` shape.
+    let ctl_fd = listener.as_ref().map(|listener| {
+        use std::os::fd::AsRawFd;
+        listener.as_raw_fd()
+    });
     loop {
-        event_queue.blocking_dispatch(&mut state)?;
+        // Commit anything we queued (requests, redraws), then wait.
+        event_queue.dispatch_pending(&mut state)?;
+        conn.flush()?;
         if state.wm.should_exit_loop {
             break;
+        }
+
+        let mut fds = [
+            libc::pollfd {
+                fd: {
+                    use std::os::fd::{AsFd, AsRawFd};
+                    event_queue.as_fd().as_raw_fd()
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: ctl_fd.unwrap_or(-1),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let count = if ctl_fd.is_some() { 2 } else { 1 };
+        // SAFETY: `fds` has `count` initialised entries and poll only writes to
+        // their `revents` fields.
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), count, -1) };
+        if ready < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(std::io::Error::last_os_error().into());
+        }
+
+        if fds[0].revents != 0 {
+            // A hangup or error means river is gone: keep it loud instead of
+            // polling a dead fd in a loop.
+            if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                return Err("the compositor connection was closed".into());
+            }
+            // The compositor has data: read it into the queue, then deliver it.
+            let Some(guard) = conn.prepare_read() else {
+                return Err("the compositor connection is already being read".into());
+            };
+            guard.read()?;
+            event_queue.dispatch_pending(&mut state)?;
+        }
+        if fds[1].revents != 0
+            && let Some(listener) = &listener
+        {
+            ctl::serve(listener, &mut state);
         }
     }
     Ok(())

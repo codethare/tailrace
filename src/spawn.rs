@@ -5,7 +5,7 @@
 //! controlling terminal (setsid + double fork), matching rill-ed spawn.zig
 //! and the behavior of kwm/dwl/etc.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 
 pub fn spawn_detached(argv: &[String]) -> Result<(), String> {
     if argv.is_empty() {
@@ -16,14 +16,7 @@ pub fn spawn_detached(argv: &[String]) -> Result<(), String> {
         .map(|a| CString::new(a.as_str()))
         .collect::<Result<_, _>>()
         .map_err(|e| format!("nul byte in argv: {e}"))?;
-    let envp: Vec<CString> = std::env::vars_os()
-        .filter_map(|(k, v)| {
-            let mut s = k.into_string().ok()?;
-            s.push('=');
-            s.push_str(&v.into_string().ok()?);
-            CString::new(s).ok()
-        })
-        .collect();
+    let envp = child_env(std::env::vars_os());
 
     // SAFETY: raw fork/exec per rill-ed spawn.zig. The parent returns
     // immediately; children only call async-signal-safe libc functions
@@ -68,6 +61,21 @@ pub fn spawn_detached(argv: &[String]) -> Result<(), String> {
         }
         libc::exit(1);
     }
+}
+
+/// The environment a spawned program inherits: tailrace's own, minus
+/// `WAYLAND_DEBUG`. That variable makes a child log every protocol message,
+/// which buries whatever the program was started for (a bar, a menu) — and
+/// tailrace may well be the one being debugged.
+fn child_env<I: Iterator<Item = (OsString, OsString)>>(vars: I) -> Vec<CString> {
+    vars.filter(|(key, _)| *key != "WAYLAND_DEBUG")
+        .filter_map(|(k, v)| {
+            let mut s = k.into_string().ok()?;
+            s.push('=');
+            s.push_str(&v.into_string().ok()?);
+            CString::new(s).ok()
+        })
+        .collect()
 }
 
 /// Write a diagnostic from the forked child to stderr. Only async-signal-safe
@@ -125,6 +133,22 @@ fn exec_search(argv: &[CString], envp: &[CString]) -> Result<(), ()> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
+    /// `WAYLAND_DEBUG` is dropped; everything else is passed through as-is.
+    #[test]
+    fn wayland_debug_is_not_passed_to_children() {
+        let vars = [
+            (OsString::from("WAYLAND_DEBUG"), OsString::from("client=1")),
+            (OsString::from("HOME"), OsString::from("/home/someone")),
+        ];
+        let env: Vec<String> = super::child_env(vars.into_iter())
+            .into_iter()
+            .map(|entry| entry.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(env, vec!["HOME=/home/someone".to_string()]);
+    }
+
     #[test]
     fn empty_argv_is_rejected() {
         assert!(super::spawn_detached(&[]).is_err());

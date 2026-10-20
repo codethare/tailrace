@@ -482,7 +482,7 @@ fn seat_removed(state: &mut AppData, seat: &RiverSeatV1) {
 /// any workspace). Mirrors rill-ed click-to-focus: switches the focused
 /// output and remembers the previous workspace for cross-output moves.
 /// Returns true if focus actually changed.
-fn focus_window(state: &mut AppData, window: &RiverWindowV1) -> bool {
+pub(crate) fn focus_window(state: &mut AppData, window: &RiverWindowV1) -> bool {
     if state
         .wm
         .focused_window()

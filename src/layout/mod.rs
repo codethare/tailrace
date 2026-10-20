@@ -358,6 +358,7 @@ pub fn snap_to_finish(wm: &mut WindowManager) {
                     river_window,
                     river_node,
                     geom,
+                    ..
                 } = window;
                 if let Some(finish) = geom.finish {
                     geom.current = finish;

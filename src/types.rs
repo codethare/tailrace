@@ -26,6 +26,9 @@ pub struct PendingWindow {
     pub bounds: ContentBounds,
     /// The window has a parent: a dialog or similar, floated on open.
     pub has_parent: bool,
+    /// river's stable identifier (v4+): unique per window and never reused, so
+    /// it is what the control socket addresses windows by.
+    pub identifier: Option<String>,
 }
 
 /// A window's own content size limits (river's `dimensions_hint`), possibly
@@ -139,6 +142,14 @@ pub struct Window {
     pub river_window: RiverWindowV1,
     pub river_node: RiverNodeV1,
     pub geom: WindowGeom,
+    /// river's stable identifier, unique and never reused. None when the
+    /// compositor does not send one (river before v4), which the control socket
+    /// reports as `-` and refuses to focus.
+    pub identifier: Option<String>,
+    /// Kept for the window list: rules only see these while the window is
+    /// pending, and a title change after mapping updates them here.
+    pub title: Option<String>,
+    pub app_id: Option<String>,
 }
 
 pub struct Workspace {

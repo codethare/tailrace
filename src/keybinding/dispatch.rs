@@ -11,6 +11,11 @@ use KeybindingAction as A;
 /// Every state-changing action ends with layout::update + status Layout; the
 /// caller requests the manage sequence.
 pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingAction) {
+    // Any other action ends a cycle, so the next `cycle_focus_*` starts from the
+    // current order instead of resuming a snapshot of it.
+    if !matches!(action, A::CycleFocusNext | A::CycleFocusPrev) {
+        state.wm.mru_cycle = None;
+    }
     match action {
         // Early-return actions without layout updates.
         A::Spawn(argv) => {
@@ -62,6 +67,9 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
         | A::FocusWindowRight
         | A::FocusWindowOrOutputRight
         | A::FocusWindowPrevious
+        | A::FocusWindowLast
+        | A::CycleFocusNext
+        | A::CycleFocusPrev
         | A::MoveWindowLeft
         | A::MoveWindowRight
         | A::MoveFloatingWindowLeft
@@ -255,6 +263,16 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
                 return;
             };
             workspace.focused_window_idx = Some(idx);
+        }
+        A::FocusWindowLast => {
+            // The front is the focused window; the one behind it is "last".
+            let target = state.wm.mru.get(1).cloned();
+            if let Some(target) = target {
+                focus_window_id(state, &target);
+            }
+        }
+        A::CycleFocusNext | A::CycleFocusPrev => {
+            cycle_focus(state, *action == A::CycleFocusNext);
         }
         A::FocusWindowLeft => {
             let workspace = state.wm.workspace_mut(output_idx, workspace_idx).unwrap();
@@ -671,6 +689,52 @@ pub fn dispatch_action(state: &mut crate::app::AppData, action: &KeybindingActio
 
     crate::layout::update(&mut state.wm);
     state.wm.status = Status::Layout;
+}
+
+/// Focus the window `id` wherever it lives: any output, any workspace. False
+/// when no window carries that identifier. The one entry point the control
+/// socket and the MRU actions share.
+pub fn focus_window_id(state: &mut crate::app::AppData, id: &str) -> bool {
+    let Some(window) = state.wm.window_by_id(id).map(|w| w.river_window.clone()) else {
+        return false;
+    };
+    crate::seat::focus_window(state, &window)
+}
+
+/// Step through the MRU order, one window per press. The order is frozen when
+/// the cycle starts: focusing a window moves it to the front of the live list,
+/// so without a snapshot the next press would jump straight back.
+fn cycle_focus(state: &mut crate::app::AppData, forward: bool) {
+    if let Some(cycle) = &mut state.wm.mru_cycle {
+        let len = cycle.order.len();
+        if len < 2 {
+            return;
+        }
+        cycle.index = if forward {
+            (cycle.index + 1) % len
+        } else {
+            (cycle.index + len - 1) % len
+        };
+    } else {
+        let len = state.wm.mru.len();
+        if len < 2 {
+            return;
+        }
+        let index = if forward { 1 } else { len - 1 };
+        state.wm.mru_cycle = Some(crate::wm::MruCycle {
+            order: state.wm.mru.clone(),
+            index,
+        });
+    }
+    let target = state
+        .wm
+        .mru_cycle
+        .as_ref()
+        .and_then(|cycle| cycle.order.get(cycle.index))
+        .cloned();
+    if let Some(target) = target {
+        focus_window_id(state, &target);
+    }
 }
 
 /// Cycle the focused window's width through `preset_column_widths` (niri's

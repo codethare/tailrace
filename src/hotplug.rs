@@ -76,6 +76,7 @@ const EVT_WIN_POINTER_MOVE_REQUESTED: u16 = 7;
 const EVT_WIN_POINTER_RESIZE_REQUESTED: u16 = 8;
 const EVT_WIN_FULLSCREEN_REQUESTED: u16 = 12;
 const EVT_WIN_EXIT_FULLSCREEN_REQUESTED: u16 = 13;
+const EVT_WIN_IDENTIFIER: u16 = 17;
 const EVT_WIN_CAPTURE_SESSIONS: u16 = 18;
 const EVT_WIN_TOUCH_MOVE_REQUESTED: u16 = 19;
 const EVT_WIN_TOUCH_RESIZE_REQUESTED: u16 = 20;
@@ -151,9 +152,11 @@ use server::{
 };
 use session::{Session, build};
 
+mod ctl;
 mod cursor;
 mod keybindings;
 mod manage;
+mod mru;
 mod outputs;
 mod overview;
 mod pointer;

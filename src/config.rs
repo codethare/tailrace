@@ -45,6 +45,15 @@ fn parse(content: &str) -> Result<Config, toml::de::Error> {
                 "window_rules[{idx}].open_on_workspace = {number} is out of range (1-10)"
             )));
         }
+        // A minimum wider than the maximum cannot be honoured: the layout lets
+        // the minimum win, so the maximum would be silently ignored.
+        if let (Some(min), Some(max)) = (rule.min_width, rule.max_width)
+            && min > max
+        {
+            return Err(toml::de::Error::custom(format!(
+                "window_rules[{idx}].min_width = {min} is greater than max_width = {max}"
+            )));
+        }
     }
     // A workspace name is only meaningful once `[[workspace]]` declares it, so
     // a name that nothing defines (a typo, or a renamed workspace) is an error
@@ -251,6 +260,25 @@ mod tests {
         );
         // A number still means a slot number.
         assert!(parse("[[window_rules]]\napp_id = \"x\"\nopen_on_workspace = 3\n").is_ok());
+    }
+
+    /// A rule cannot ask for a minimum wider than its maximum: the layout lets
+    /// the minimum win, so the pair would silently ignore the maximum.
+    #[test]
+    fn contradictory_content_width_bounds_are_rejected() {
+        let rule = |min: i32, max: i32| {
+            format!("[[window_rules]]\napp_id = \"x\"\nmin_width = {min}\nmax_width = {max}\n")
+        };
+        assert!(parse(&rule(300, 900)).is_ok());
+        assert!(
+            parse(&rule(900, 900)).is_ok(),
+            "equal bounds are satisfiable"
+        );
+        assert!(parse(&rule(900, 300)).is_err());
+
+        // Either bound on its own is fine.
+        assert!(parse("[[window_rules]]\napp_id = \"x\"\nmin_width = 900\n").is_ok());
+        assert!(parse("[[window_rules]]\napp_id = \"x\"\nmax_width = 300\n").is_ok());
     }
 
     /// The shipped example must parse against the schema and must not change

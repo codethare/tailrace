@@ -56,6 +56,11 @@ pub enum KeybindingAction {
     FocusWindowRight,
     FocusWindowOrOutputRight,
     FocusWindowPrevious,
+    /// Focus the most recently used window on any workspace/output.
+    FocusWindowLast,
+    /// Step through the most-recently-used order, one window per press.
+    CycleFocusNext,
+    CycleFocusPrev,
     MoveWindowLeft,
     MoveWindowRight,
     MoveFloatingWindowLeft,

@@ -58,6 +58,7 @@ pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seats: &mut [SeatS
                     river_window,
                     river_node,
                     geom,
+                    ..
                 } = window;
                 apply_window_border(river_window, geom, is_focused, &config);
 
@@ -93,6 +94,18 @@ pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seats: &mut [SeatS
                 .and_then(|fwi| workspace.window_list.get(fwi))
                 .map(|w| w.river_window.clone())
         };
+
+    // The MRU list is global and has one writer: the focus this pass commits.
+    // Doing it here (rather than in every action) is what keeps the two in step.
+    if let Some(window) = &desired_focus
+        && let Some((output_idx, workspace_idx, window_idx)) = wm.locate_window(window)
+        && let Some(id) = wm.outputs[output_idx].workspace_list[workspace_idx].window_list
+            [window_idx]
+            .identifier
+            .clone()
+    {
+        wm.mru_promote(&id);
+    }
 
     for seat_state in seats.iter_mut() {
         if seat_state.layer_shell_focus == LayerShellFocus::Exclusive {

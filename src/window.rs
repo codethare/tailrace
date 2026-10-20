@@ -41,6 +41,16 @@ pub fn window_event(
                 PendingField::AppId,
             );
         }
+        // Sent once when the object is created and never again: the value the
+        // control socket addresses this window by.
+        river_window_v1::Event::Identifier { identifier } => {
+            for pending in &mut state.wm.pending_windows {
+                if &pending.river_window == river_window {
+                    pending.identifier = Some(identifier.clone());
+                    break;
+                }
+            }
+        }
         // Sent once when the window object is created, i.e. before the first
         // `dimensions` maps it, so the pending phase has to keep the count.
         river_window_v1::Event::CaptureSessions { count } => {
@@ -144,7 +154,11 @@ pub fn window_event(
                     } else if win_idx <= focused_idx && focused_idx != 0 {
                         workspace.focused_window_idx = Some(focused_idx - 1);
                     }
+                    let closed_identifier = workspace.window_list[win_idx].identifier.clone();
                     workspace.window_list.remove(win_idx);
+                    if let Some(id) = closed_identifier {
+                        state.wm.mru_remove(&id);
+                    }
                     for seat_state in &mut state.seats {
                         if seat_state.last_focused_window.as_ref() == Some(river_window) {
                             seat_state.last_focused_window = None;
@@ -176,6 +190,27 @@ pub fn window_event(
                         .window_list[win_idx]
                         .geom
                         .is_fullscreen = false;
+                }
+                // A mapped window's title changes (a browser tab, a terminal
+                // running less): keep it for the window list. Nothing is
+                // committed to river, so there is no status to set.
+                river_window_v1::Event::Title { title } => {
+                    state
+                        .wm
+                        .workspace_mut(output_idx, workspace_idx)
+                        .unwrap()
+                        .window_list[win_idx]
+                        .title = title;
+                    return false;
+                }
+                river_window_v1::Event::AppId { app_id } => {
+                    state
+                        .wm
+                        .workspace_mut(output_idx, workspace_idx)
+                        .unwrap()
+                        .window_list[win_idx]
+                        .app_id = app_id;
+                    return false;
                 }
                 // While a window is being captured (screencast, window share)
                 // the layout stops proposing new dimensions so the stream does
@@ -271,7 +306,11 @@ pub fn window_event(
                 } else if win_idx <= focused_idx && focused_idx != 0 {
                     workspace.focused_window_idx = Some(focused_idx - 1);
                 }
+                let closed_identifier = workspace.window_list[win_idx].identifier.clone();
                 workspace.window_list.remove(win_idx);
+                if let Some(id) = closed_identifier {
+                    state.wm.mru_remove(&id);
+                }
                 for seat_state in &mut state.seats {
                     if seat_state.last_focused_window.as_ref() == Some(river_window) {
                         seat_state.last_focused_window = None;
@@ -396,6 +435,9 @@ fn add_window(
         geom.bounds.max_width = max;
     }
     let window = Window {
+        identifier: pending.identifier,
+        title: pending.title,
+        app_id: pending.app_id,
         river_window: pending.river_window,
         river_node,
         geom,
