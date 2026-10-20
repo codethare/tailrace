@@ -24,18 +24,12 @@ impl Session {
             river_wm: None,
             river_xkb: None,
             river_layer_shell: None,
-            river_seat: None,
-            layer_shell_seat: None,
+            seats: Vec::new(),
             config_path: None,
             warned_missing_seat: false,
-            wl_seat: None,
             wl_seat_version: 0,
-            wl_pointer: None,
             cursor_shape_manager: None,
-            cursor_shape: None,
             wm: WindowManager::new(config::default_config()),
-            xkb_bindings: Vec::new(),
-            pointer_bindings: Vec::new(),
             qh: qh.clone(),
         };
         let mut s = Session { queue, conn, state };
@@ -122,19 +116,26 @@ impl Session {
     /// makes the client bind wl_seat and create the wl_pointer plus (when the
     /// compositor offers it) the cursor shape device.
     pub(super) fn add_wl_seat(&mut self, server: &mut MiniServer, seat: ObjectId) {
-        self.send(
-            server,
-            seat,
-            EVT_SEAT_WL_SEAT,
-            vec![Argument::Uint(GLOBAL_NAME_WL_SEAT)],
-        );
+        self.add_wl_seat_global(server, seat, GLOBAL_NAME_WL_SEAT);
+    }
+
+    /// Announce one seat's wl_seat global: the global name decides which
+    /// wl_seat the client binds, so a second seat needs its own.
+    pub(super) fn add_wl_seat_global(
+        &mut self,
+        server: &mut MiniServer,
+        seat: ObjectId,
+        global: u32,
+    ) {
+        self.send(server, seat, EVT_SEAT_WL_SEAT, vec![Argument::Uint(global)]);
+        // The newest bind of a wl_seat global is this seat's.
         let wl_seat = server
             .bind_log
             .0
             .lock()
             .unwrap()
             .iter()
-            .find(|(label, _)| *label == "wl_seat")
+            .rfind(|(label, _)| label.starts_with("wl_seat"))
             .map(|(_, object)| object.clone())
             .expect("client bound wl_seat");
         self.send(

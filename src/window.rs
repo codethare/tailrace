@@ -145,8 +145,10 @@ pub fn window_event(
                         workspace.focused_window_idx = Some(focused_idx - 1);
                     }
                     workspace.window_list.remove(win_idx);
-                    if state.wm.last_focused_window.as_ref() == Some(river_window) {
-                        state.wm.last_focused_window = None;
+                    for seat_state in &mut state.seats {
+                        if seat_state.last_focused_window.as_ref() == Some(river_window) {
+                            seat_state.last_focused_window = None;
+                        }
                     }
                     if state.wm.lock_focus.as_ref() == Some(river_window) {
                         state.wm.lock_focus = None;
@@ -270,8 +272,10 @@ pub fn window_event(
                     workspace.focused_window_idx = Some(focused_idx - 1);
                 }
                 workspace.window_list.remove(win_idx);
-                if state.wm.last_focused_window.as_ref() == Some(river_window) {
-                    state.wm.last_focused_window = None;
+                for seat_state in &mut state.seats {
+                    if seat_state.last_focused_window.as_ref() == Some(river_window) {
+                        seat_state.last_focused_window = None;
+                    }
                 }
                 if state.wm.lock_focus.as_ref() == Some(river_window) {
                     state.wm.lock_focus = None;

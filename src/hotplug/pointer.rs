@@ -104,7 +104,10 @@ fn pointer_binding_drag_moves_floating_window() {
     assert!(
         matches!(
             s.state.wm.status,
-            crate::types::Status::PointerAction(crate::actions::PointerAction::MoveWindow)
+            crate::types::Status::PointerAction {
+                action: crate::actions::PointerAction::MoveWindow,
+                ..
+            }
         ),
         "press must enter the move drag state, got {:?}",
         s.state.wm.status
@@ -162,10 +165,10 @@ fn removed_seat_destroys_its_bindings_and_a_new_seat_gets_new_ones() {
     s.add_wl_seat(&mut sv, seat.clone());
     s.add_window(&mut sv);
     s.manage(&mut sv);
-    assert_eq!(s.state.pointer_bindings.len(), 2);
-    assert!(s.state.river_seat.is_some());
-    assert!(s.state.wl_seat.is_some());
-    assert!(s.state.layer_shell_seat.is_some());
+    assert_eq!(s.state.seats[0].pointer_bindings.len(), 2);
+    assert!(s.state.seats.len() == 1);
+    assert!(s.state.seats[0].wl_seat.is_some());
+    assert!(s.state.seats[0].layer_shell_seat.is_some());
 
     let bindings: Vec<ObjectId> = children_with_interface(&sv, "river_xkb_binding_v1")
         .into_iter()
@@ -175,14 +178,7 @@ fn removed_seat_destroys_its_bindings_and_a_new_seat_gets_new_ones() {
 
     sv.clear_request_log();
     s.send(&mut sv, seat.clone(), EVT_SEAT_REMOVED, vec![]);
-    assert!(
-        s.state.river_seat.is_none(),
-        "the stale seat proxy is dropped"
-    );
-    assert!(s.state.wl_seat.is_none());
-    assert!(s.state.layer_shell_seat.is_none());
-    assert!(s.state.xkb_bindings.is_empty());
-    assert!(s.state.pointer_bindings.is_empty());
+    assert!(s.state.seats.is_empty(), "the stale seat proxy is dropped");
     assert_eq!(
         count_requests(&sv, &seat, REQ_SEAT_DESTROY),
         1,
@@ -201,9 +197,9 @@ fn removed_seat_destroys_its_bindings_and_a_new_seat_gets_new_ones() {
     // A new seat re-establishes bindings.
     s.add_seat(&mut sv);
     s.manage(&mut sv);
-    assert!(s.state.river_seat.is_some());
-    assert_eq!(s.state.pointer_bindings.len(), 2);
-    assert!(s.state.xkb_bindings.len() > 50);
+    assert!(s.state.seats.len() == 1);
+    assert_eq!(s.state.seats[0].pointer_bindings.len(), 2);
+    assert!(s.state.seats[0].xkb_bindings.len() > 50);
     s.check_consistent();
 }
 
@@ -284,7 +280,10 @@ fn client_move_request_drags_a_floating_window() {
     assert!(
         matches!(
             s.state.wm.status,
-            crate::types::Status::PointerAction(crate::actions::PointerAction::MoveWindow)
+            crate::types::Status::PointerAction {
+                action: crate::actions::PointerAction::MoveWindow,
+                ..
+            }
         ),
         "a pointer move request must start the move drag, got {:?}",
         s.state.wm.status
@@ -347,7 +346,10 @@ fn client_resize_request_resizes_a_floating_window() {
     assert!(
         matches!(
             s.state.wm.status,
-            crate::types::Status::PointerAction(crate::actions::PointerAction::ResizeWindow)
+            crate::types::Status::PointerAction {
+                action: crate::actions::PointerAction::ResizeWindow,
+                ..
+            }
         ),
         "a pointer resize request must start the resize drag, got {:?}",
         s.state.wm.status
@@ -405,7 +407,8 @@ fn touch_move_request_drags_a_floating_window() {
             s.state.wm.status,
             crate::types::Status::TouchAction {
                 action: crate::actions::PointerAction::MoveWindow,
-                touch_point: 7
+                touch_point: 7,
+                ..
             }
         ),
         "a touch move request must start a touch op, got {:?}",

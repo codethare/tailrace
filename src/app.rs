@@ -21,7 +21,7 @@ use crate::river::river_window_v1::RiverWindowV1;
 use crate::river::river_xkb_binding_v1::RiverXkbBindingV1;
 use crate::river::river_xkb_bindings_v1::RiverXkbBindingsV1;
 use crate::types::{PendingWindow, Status};
-use crate::wm::WindowManager;
+use crate::wm::{LayerShellFocus, WindowManager};
 
 pub struct XkbBinding {
     pub proxy: RiverXkbBindingV1,
@@ -33,30 +33,62 @@ pub struct PointerBindingEntry {
     pub action: PointerAction,
 }
 
+/// One river seat and everything derived from it: the proxies river handed us
+/// for it, its bindings, and the focus it was last told about.
+///
+/// Seats come and go at runtime (ext-transient-seat-v1 on the compositor side
+/// creates one per remote-desktop or VM session), so this state is kept per
+/// seat and found by proxy identity — river's seat *names* are not unique at
+/// creation time and change hands when a seat goes away.
+pub struct SeatState {
+    pub river_seat: RiverSeatV1,
+    pub wl_seat: Option<WlSeat>,
+    pub wl_pointer: Option<WlPointer>,
+    pub cursor_shape: Option<WpCursorShapeDeviceV1>,
+    pub layer_shell_seat: Option<RiverLayerShellSeatV1>,
+    pub xkb_bindings: Vec<XkbBinding>,
+    pub pointer_bindings: Vec<PointerBindingEntry>,
+    /// Layer-shell keyboard focus on this seat.
+    pub layer_shell_focus: LayerShellFocus,
+    /// Last window we asked *this* seat to focus. Per seat, because river
+    /// tracks keyboard focus per seat: one shared cache would starve every
+    /// seat but the one that moved last. Kept to avoid redundant focus
+    /// requests, which break input method clients (fcitx5).
+    pub last_focused_window: Option<RiverWindowV1>,
+}
+
+impl SeatState {
+    fn new(river_seat: RiverSeatV1) -> SeatState {
+        SeatState {
+            river_seat,
+            wl_seat: None,
+            wl_pointer: None,
+            cursor_shape: None,
+            layer_shell_seat: None,
+            xkb_bindings: Vec::new(),
+            pointer_bindings: Vec::new(),
+            layer_shell_focus: LayerShellFocus::None,
+            last_focused_window: None,
+        }
+    }
+}
+
 pub struct AppData {
     pub registry: WlRegistry,
     pub river_wm: Option<RiverWindowManagerV1>,
     pub river_xkb: Option<RiverXkbBindingsV1>,
     pub river_layer_shell: Option<RiverLayerShellV1>,
-    pub river_seat: Option<RiverSeatV1>,
-    pub layer_shell_seat: Option<RiverLayerShellSeatV1>,
-    /// wl_seat of the river seat, bound so the window manager can set the
-    /// pointer cursor during pointer operations (river-window-management-v1
-    /// v4: the WM may set cursor surface/shape without pointer focus).
+    /// Every seat river has handed out, in creation order.
+    pub seats: Vec<SeatState>,
     /// Config file given with -c/--config, if any: used for reload too.
     pub config_path: Option<std::path::PathBuf>,
     /// The missing-seat warning is worth printing once, not on every manage.
     pub warned_missing_seat: bool,
-    pub wl_seat: Option<WlSeat>,
     /// wl_seat version advertised by the registry, needed to bind it later
     /// from the river seat's `wl_seat` event (which only carries the name).
     pub wl_seat_version: u32,
-    pub wl_pointer: Option<WlPointer>,
     pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
-    pub cursor_shape: Option<WpCursorShapeDeviceV1>,
     pub wm: WindowManager,
-    pub xkb_bindings: Vec<XkbBinding>,
-    pub pointer_bindings: Vec<PointerBindingEntry>,
     /// Queue handle, kept for creating child proxies (get_node, bindings...).
     pub qh: QueueHandle<AppData>,
 }
@@ -67,6 +99,31 @@ impl AppData {
         if let Some(river_wm) = &self.river_wm {
             river_wm.manage_dirty();
         }
+    }
+
+    pub fn seat(&self, river_seat: &RiverSeatV1) -> Option<&SeatState> {
+        self.seats.iter().find(|s| &s.river_seat == river_seat)
+    }
+
+    pub fn seat_mut(&mut self, river_seat: &RiverSeatV1) -> Option<&mut SeatState> {
+        self.seats.iter_mut().find(|s| &s.river_seat == river_seat)
+    }
+
+    pub fn seat_index_by_wl_seat(&self, wl_seat: &WlSeat) -> Option<usize> {
+        self.seats
+            .iter()
+            .position(|s| s.wl_seat.as_ref() == Some(wl_seat))
+    }
+
+    pub fn seat_index_by_layer_shell_seat(&self, seat: &RiverLayerShellSeatV1) -> Option<usize> {
+        self.seats
+            .iter()
+            .position(|s| s.layer_shell_seat.as_ref() == Some(seat))
+    }
+
+    pub fn add_seat(&mut self, river_seat: RiverSeatV1) -> &mut SeatState {
+        self.seats.push(SeatState::new(river_seat));
+        self.seats.last_mut().expect("just pushed")
     }
 }
 
@@ -164,8 +221,8 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppData {
                 crate::output::output_added(state, id, qh);
             }
             Event::Seat { id } => {
-                state.river_seat = Some(id);
-                crate::seat::seat_added(state, qh);
+                state.add_seat(id.clone());
+                crate::seat::seat_added(state, &id, qh);
                 // Request binding setup via the flag: output/window events set
                 // `status` directly, so assigning Status::SetupBindings here
                 // loses the request whenever one of them lands before the next
@@ -195,10 +252,12 @@ impl Dispatch<RiverWindowManagerV1, ()> for AppData {
                     state.wm.outputs[oi].workspace_list[wi].focused_window_idx = Some(wi2);
                 }
                 state.wm.lock_focus = None;
-                state.wm.layer_shell_focus = crate::wm::LayerShellFocus::None;
-                // The lock surface held keyboard focus; invalidate the stale
-                // focus cache so focus_window is re-issued on unlock.
-                state.wm.last_focused_window = None;
+                for seat in &mut state.seats {
+                    seat.layer_shell_focus = crate::wm::LayerShellFocus::None;
+                    // The lock surface held keyboard focus on every seat;
+                    // invalidate the stale caches so focus_window is re-issued.
+                    seat.last_focused_window = None;
+                }
                 state.wm.needs_refocus = true;
                 state.wm.status = Status::Layout;
                 state.manage_dirty();
@@ -235,20 +294,26 @@ impl Dispatch<WlSeat, ()> for AppData {
         let WEnum::Value(capabilities) = capabilities else {
             return;
         };
+        // The device belongs to the wl_seat's own river seat, so a transient
+        // seat's pointer never replaces the physical one.
+        let Some(idx) = state.seat_index_by_wl_seat(seat) else {
+            return;
+        };
         if capabilities.contains(wl_seat::Capability::Pointer) {
-            if state.wl_pointer.is_none() {
+            if state.seats[idx].wl_pointer.is_none() {
                 let pointer = seat.get_pointer(qh, ());
-                state.cursor_shape = state
+                let shape = state
                     .cursor_shape_manager
                     .as_ref()
                     .map(|manager| manager.get_pointer(&pointer, qh, ()));
-                state.wl_pointer = Some(pointer);
+                state.seats[idx].cursor_shape = shape;
+                state.seats[idx].wl_pointer = Some(pointer);
             }
-        } else if let Some(pointer) = state.wl_pointer.take() {
+        } else if let Some(pointer) = state.seats[idx].wl_pointer.take() {
             if pointer.version() >= 3 {
                 pointer.release();
             }
-            state.cursor_shape = None;
+            state.seats[idx].cursor_shape = None;
         }
     }
 }
@@ -262,13 +327,13 @@ pub fn manage(state: &mut AppData) {
     if state.wm.focused_output_idx.is_none() {
         return;
     }
-    let Some(seat) = state.river_seat.clone() else {
+    if state.seats.is_empty() {
         if !state.warned_missing_seat {
             state.warned_missing_seat = true;
             eprintln!("tailrace: no seat yet, waiting for river_seat_v1");
         }
         return;
-    };
+    }
 
     // Handled only once the prerequisites exist: the seat event sets this flag,
     // but manage returns early (dropping the request) while no output is
@@ -280,7 +345,7 @@ pub fn manage(state: &mut AppData) {
 
     match state.wm.status.clone() {
         Status::Layout => {
-            crate::layout::apply(&mut state.wm, &seat);
+            crate::layout::apply(&mut state.wm, &mut state.seats);
             if state.wm.needs_refocus {
                 // focus_window may have been ignored during exclusive focus;
                 // stay in Layout so the next manage sequence retries focus.
@@ -292,15 +357,17 @@ pub fn manage(state: &mut AppData) {
             }
         }
         Status::Overview => {
-            crate::overview::apply_borders(&mut state.wm, &seat);
+            crate::overview::apply_borders(&mut state.wm, &mut state.seats);
             crate::layout::snap_to_finish(&mut state.wm);
             state.wm.status = Status::None;
         }
-        Status::PointerAction(_action) => {
+        Status::PointerAction { seat, .. } => {
             seat.op_start_pointer();
             crate::seat::op_action(&mut state.wm);
         }
-        Status::TouchAction { touch_point, .. } => {
+        Status::TouchAction {
+            seat, touch_point, ..
+        } => {
             // river ignores a repeat request for a touch point that already has
             // an operation, so this is safe to re-issue on every delta event.
             seat.op_start_touch(touch_point);
@@ -317,6 +384,12 @@ pub fn manage(state: &mut AppData) {
                 river_wm.exit_session();
             }
         }
-        Status::None => seat.op_end(),
+        // Ignored by river where no operation is in progress, so every seat
+        // can be told the sequence that owns an op is over.
+        Status::None => {
+            for seat in &state.seats {
+                seat.river_seat.op_end();
+            }
+        }
     }
 }

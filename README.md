@@ -23,6 +23,9 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 * Overview mode: grid of all windows across outputs/workspaces, vi-key navigation
 * Live-reloading TOML config
 * Multi-output with window migration (windows return to their output when it reappears)
+* Multiple seats: a seat created at runtime for a remote-desktop or VM session
+  (river's ext-transient-seat-v1) gets its own keybindings and keyboard focus,
+  and going away leaves the physical seat working
 * TTY switch resilience — workspaces survive output removal (laptop panel off, lock)
 * Window rules by exact `app_id` / glob `title`: float, open on a given workspace or output, or open at a given width
 * Dialogs (windows with a parent) float instead of taking a column

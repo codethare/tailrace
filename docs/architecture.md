@@ -66,11 +66,12 @@ with `render_finish`.
 
 Focus is derived state: `focused_output_idx` → `focused_workspace_idx` →
 `focused_window_idx`. `apply_focus_and_borders` is the only place that talks
-to river about focus, and it only does so when the target differs from
-`last_focused_window` — so any code that changes focus must not also update
-that cache. Focus commands are suppressed entirely while a layer-shell surface
-holds exclusive focus or the session is locked; `needs_refocus` makes the next
-sequence retry.
+to river about focus, and it only does so for a seat whose
+`last_focused_window` differs from the target — every seat keeps its own cache
+because river tracks keyboard focus per seat. Focus commands are suppressed for
+a seat while a layer-shell surface holds exclusive focus on it, and for all
+seats while the session is locked; `needs_refocus` makes the next sequence
+retry.
 
 Interactive move/resize ops (pointer bindings, and the window's own
 `pointer_*_requested` / `touch_*_requested` events in `window.rs`) only target
@@ -94,8 +95,8 @@ under test, call `manage()`, then assert on `Session.state` or on the request
 log. Helpers: `add_output`, `add_pending_window` + `map_window`,
 `add_window`, `add_wl_seat`, `manage`, `config_mut`, plus `children_with_interface`,
 `count_requests` and `requests_for` for assertions. Each scenario module
-(`outputs.rs`, `pointer.rs`, `windows.rs`, `manage.rs`, `overview.rs`,
-`keybindings.rs`, `cursor.rs`, `rules.rs`) covers one area.
+(`outputs.rs`, `seats.rs`, `pointer.rs`, `windows.rs`, `manage.rs`,
+`overview.rs`, `keybindings.rs`, `cursor.rs`, `rules.rs`) covers one area.
 
 Limits: there is no compositor, so requests are recorded rather than executed,
 nothing is rendered, and protocol errors only surface as panics inside the
@@ -103,6 +104,15 @@ backend. Passing tests prove what tailrace *asks for*, not what river does.
 
 ## Traps worth knowing
 
+- **Seats are per seat, not global.** river creates seats at runtime
+  (ext-transient-seat-v1: a remote-desktop or VM session), so `AppData.seats`
+  holds one `SeatState` per `river_seat_v1` — its bindings, `wl_seat`,
+  `layer_shell_seat`, layer-shell focus and focus cache. Seat state is looked
+  up by proxy identity, never by river's seat name (names are assigned at
+  creation and can be handed out again). A pointer operation carries its seat
+  in `Status`, because `op_start_pointer`/`op_end` are requests on that seat;
+  `seat_removed` must destroy only that seat's objects, or a transient seat
+  going away takes the physical seat's bindings with it.
 - **State pokes need a status.** Setting fields and calling `manage()` does
   nothing unless `status == Status::Layout`: the focus gates and the layout
   pass only run from there. A test asserting "no request was sent" after a

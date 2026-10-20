@@ -19,7 +19,7 @@ use migrate::{
     migrate_detached_into, migrate_output_windows, migrate_windows_by_name,
 };
 
-use crate::river::river_seat_v1::RiverSeatV1;
+use crate::app::SeatState;
 use crate::river::wayland_client::Proxy;
 use crate::types::{Window, WindowGeom};
 use crate::wm::WindowManager;
@@ -111,7 +111,7 @@ pub fn update(wm: &mut WindowManager) {
 /// Full manage-pass layout: pending window init, removed-output handling
 /// (migrate or detach), detached restore, window migration back to their
 /// former output, focus/borders, float raising, pointer warp.
-pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
+pub fn apply(wm: &mut WindowManager, seats: &mut [SeatState]) {
     // Initialize pending windows so they don't flash on screen.
     for pending in wm.pending_windows.iter_mut() {
         if pending.initialized {
@@ -199,9 +199,13 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         // TTY switch lands on the window the user was using.
         if wm.focused_output_idx.is_none() {
             if wm.resume_focus.is_none() {
-                wm.resume_focus = wm.last_focused_window.clone();
+                wm.resume_focus = seats
+                    .iter()
+                    .find_map(|seat_state| seat_state.last_focused_window.clone());
             }
-            wm.last_focused_window = None;
+            for seat_state in seats.iter_mut() {
+                seat_state.last_focused_window = None;
+            }
             wm.previous_workspace = None;
         }
 
@@ -280,12 +284,12 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         // Follow the window that was in use: an output going away or coming
         // back must not leave the view on a workspace the user's window is not
         // on, where the returned windows sit off-screen and keyboard focus has
-        // nothing to move from. The window is the one that had focus when its
-        // output went away (`resume_focus`, across manage passes) or the one
-        // focused now (`last_focused_window`, same pass).
-        if let Some(focus) = wm
-            .last_focused_window
-            .clone()
+        // nothing to move from. The window is the one the seats were last told
+        // to focus (the same pass) or the one that had focus when its output
+        // went away (`resume_focus`, across manage passes).
+        if let Some(focus) = seats
+            .iter()
+            .find_map(|seat_state| seat_state.last_focused_window.clone())
             .or_else(|| wm.resume_focus.clone())
             && let Some((output_idx, workspace_idx, _)) = wm.locate_window(&focus)
         {
@@ -299,7 +303,7 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
         update(wm);
     }
 
-    apply_focus_and_borders(wm, seat);
+    apply_focus_and_borders(wm, seats);
 
     // Focus raising in apply_focus_and_borders (including a focused tile
     // raising above floats) is overridden here within the same transaction.
@@ -308,10 +312,12 @@ pub fn apply(wm: &mut WindowManager, seat: &RiverSeatV1) {
     // Warp the pointer to the focused output's center when focus moved to a
     // different output (niri/hyprland behavior; keeps the cursor off
     // disabled or newly-connected displays).
+    // The primary seat owns the real cursor; a transient seat's virtual pointer
+    // is mapped to an output by the compositor and is not ours to warp.
     if wm.needs_pointer_warp {
         wm.needs_pointer_warp = false;
-        if let Some(output) = wm.focused_output() {
-            seat.pointer_warp(
+        if let (Some(output), Some(seat_state)) = (wm.focused_output(), seats.first()) {
+            seat_state.river_seat.pointer_warp(
                 output.rectangle.x + output.rectangle.width / 2,
                 output.rectangle.y + output.rectangle.height / 2,
             );

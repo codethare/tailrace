@@ -27,12 +27,24 @@ tailrace requires River `main` or a later release advertising
 
 Newer additions are vendored and used: window capture-session counts, dimension
 bounds, v6 touch operations, client-requested interactive move/resize,
-capabilities and the content clip box. Still deliberately unused: xkb modifier
+capabilities and the clip box. Still deliberately unused: the content clip box
+(river positions the border frame at the node origin, so a clip that cuts the
+left or top edge offsets it; `set_clip_box` is used instead), xkb modifier
 watching (`river_xkb_bindings_seat_v1.modifiers_watch`), output capture-session
 counts, `set_presentation_mode`, and the xdg-shell requests tailrace ignores
 (maximize, minimize, window menu, `use_csd`, decoration surfaces).
 `src/window.rs`, `src/seat.rs`, and `src/output.rs` carry explicit no-op arms
 where the generated event enums require them.
+
+Checked against river `main` on 2025-10-20 (0.6.0-dev, commit `13752403`):
+`protocol/update.sh main` is a no-op, all three files byte-identical. The
+protocol-relevant work since `fd5ea7f` is compositor-side only —
+ext-transient-seat-v1 (`b2c2b6a7`, `49b1e7de`, `3a7ac1c6`),
+river-virtual-keyboard-v1 (`bfda604a`), and the virtual-pointer seat hint and
+output mapping fixes (`869c64a9`, `831ad21d`) — none of which changes
+`river-window-management-v1` (still v6) or `river-xkb-bindings-v1` (still v3).
+What a window manager has to do about them is handle seats that appear and
+disappear at runtime; see `docs/architecture.md`.
 
 Verified by blob equality rather than by date, e.g. for the window management
 protocol:

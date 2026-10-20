@@ -23,7 +23,7 @@ fn setup_bindings_waits_for_an_output_and_runs_once() {
         "the setup request must survive a manage without a focused output"
     );
     assert!(
-        s.state.pointer_bindings.is_empty(),
+        s.state.seats[0].pointer_bindings.is_empty(),
         "no bindings before an output exists"
     );
 
@@ -31,14 +31,14 @@ fn setup_bindings_waits_for_an_output_and_runs_once() {
     s.manage(&mut sv);
     assert!(!s.state.wm.needs_setup_bindings, "request consumed");
     assert_eq!(
-        s.state.pointer_bindings.len(),
+        s.state.seats[0].pointer_bindings.len(),
         2,
         "default pointer bindings"
     );
     assert!(
-        s.state.xkb_bindings.len() > 50,
+        s.state.seats[0].xkb_bindings.len() > 50,
         "default keybindings, got {}",
-        s.state.xkb_bindings.len()
+        s.state.seats[0].xkb_bindings.len()
     );
 
     // Later manage cycles must not re-create bindings.
@@ -85,7 +85,7 @@ fn exclusive_layer_shell_focus_skips_focus_commands() {
     s.add_window(&mut sv);
     s.manage(&mut sv);
 
-    s.state.wm.layer_shell_focus = crate::wm::LayerShellFocus::Exclusive;
+    s.state.seats[0].layer_shell_focus = crate::wm::LayerShellFocus::Exclusive;
     // Focus gates only run from the Layout status; a bare state poke would
     // make the "no focus commands" assertion vacuous.
     s.state.wm.status = crate::types::Status::Layout;
@@ -100,8 +100,8 @@ fn exclusive_layer_shell_focus_skips_focus_commands() {
 
     // Focus revoked: mirrors layer_shell_seat_event(FocusNone), which clears
     // the focus cache, forces a refocus and re-enters the layout state.
-    s.state.wm.layer_shell_focus = crate::wm::LayerShellFocus::None;
-    s.state.wm.last_focused_window = None;
+    s.state.seats[0].layer_shell_focus = crate::wm::LayerShellFocus::None;
+    s.state.seats[0].last_focused_window = None;
     s.state.wm.needs_refocus = true;
     s.state.wm.status = crate::types::Status::Layout;
     sv.clear_request_log();
@@ -191,14 +191,14 @@ fn nonexclusive_layer_shell_focus_is_not_cleared() {
     s.add_window(&mut sv);
     s.manage(&mut sv);
     assert!(
-        s.state.wm.last_focused_window.is_some(),
+        s.state.seats[0].last_focused_window.is_some(),
         "a window was focused"
     );
 
     // The window goes away as a focus candidate (e.g. it was closed and the
     // index cleared): with a non-exclusive layer surface the bar keeps focus.
     s.state.wm.outputs[0].workspace_list[0].focused_window_idx = None;
-    s.state.wm.layer_shell_focus = crate::wm::LayerShellFocus::NonExclusive;
+    s.state.seats[0].layer_shell_focus = crate::wm::LayerShellFocus::NonExclusive;
     // Poking state does not schedule a manage; the focus gates only run from
     // the Layout status.
     s.state.wm.status = crate::types::Status::Layout;
@@ -215,8 +215,8 @@ fn nonexclusive_layer_shell_focus_is_not_cleared() {
     let previously_focused = s.state.wm.outputs[0].workspace_list[0].window_list[0]
         .river_window
         .clone();
-    s.state.wm.layer_shell_focus = crate::wm::LayerShellFocus::None;
-    s.state.wm.last_focused_window = Some(previously_focused);
+    s.state.seats[0].layer_shell_focus = crate::wm::LayerShellFocus::None;
+    s.state.seats[0].last_focused_window = Some(previously_focused);
     s.state.wm.status = crate::types::Status::Layout;
     sv.clear_request_log();
     s.manage(&mut sv);

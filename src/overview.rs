@@ -7,9 +7,9 @@
 //! finish rect is rewritten to a grid cell on the focused output. Canceling
 //! is therefore a strict no-op on the layout data model.
 
-use crate::app::AppData;
+use crate::app::{AppData, SeatState};
 use crate::layout;
-use crate::river::river_seat_v1::RiverSeatV1;
+use crate::river::river_window_v1::RiverWindowV1;
 use crate::types::{OverviewEntry, OverviewHome, OverviewState, Rectangle, Status};
 use crate::wm::WindowManager;
 
@@ -257,17 +257,25 @@ pub fn prune(state: &mut AppData) {
 }
 
 /// Apply border colors and focus for the overview state without
-/// recalculating layout.
-pub fn apply_borders(wm: &mut WindowManager, river_seat: &RiverSeatV1) {
+/// recalculating layout. The highlighted window is focused on every seat.
+pub fn apply_borders(wm: &mut WindowManager, seats: &mut [SeatState]) {
     let Some(ov_state) = wm.overview_state.as_ref() else {
         return;
     };
     let config = wm.config.clone();
+    let highlighted = ov_state.highlighted;
+    let entries: Vec<RiverWindowV1> = ov_state
+        .entries
+        .iter()
+        .map(|entry| entry.window.clone())
+        .collect();
 
-    river_seat.clear_focus();
+    for seat_state in seats.iter_mut() {
+        seat_state.river_seat.clear_focus();
+    }
 
-    for (idx, entry) in ov_state.entries.iter().enumerate() {
-        let Some(loc) = locate(wm, &entry.window) else {
+    for (idx, entry_window) in entries.iter().enumerate() {
+        let Some(loc) = locate(wm, entry_window) else {
             continue;
         };
         let window = &mut wm.outputs[loc.output_idx].workspace_list[loc.workspace_idx].window_list
@@ -275,14 +283,17 @@ pub fn apply_borders(wm: &mut WindowManager, river_seat: &RiverSeatV1) {
 
         window.river_window.exit_fullscreen();
 
-        let is_focused = idx == ov_state.highlighted;
+        let is_focused = idx == highlighted;
         layout::apply_window_border(&window.river_window, &mut window.geom, is_focused, &config);
         if is_focused {
             // Deliberate relaxation of the floats-on-top invariant: in the
             // overview grid windows do not overlap, so raising the
             // highlighted window is only a UI affordance.
             window.river_node.place_top();
-            river_seat.focus_window(&window.river_window);
+            let focused_window = window.river_window.clone();
+            for seat_state in seats.iter_mut() {
+                seat_state.river_seat.focus_window(&focused_window);
+            }
         }
     }
 }

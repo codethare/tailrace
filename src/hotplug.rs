@@ -158,4 +158,5 @@ mod outputs;
 mod overview;
 mod pointer;
 mod rules;
+mod seats;
 mod windows;

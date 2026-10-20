@@ -40,7 +40,7 @@ fn drag_sets_and_restores_the_cursor_shape() {
     );
     s.manage(&mut sv);
     assert!(
-        s.state.cursor_shape.is_some(),
+        s.state.seats[0].cursor_shape.is_some(),
         "the client must create the cursor shape device when the compositor offers it"
     );
 
@@ -85,7 +85,10 @@ fn drag_without_cursor_shape_manager_is_silent() {
     assert!(
         matches!(
             s.state.wm.status,
-            crate::types::Status::PointerAction(crate::actions::PointerAction::MoveWindow)
+            crate::types::Status::PointerAction {
+                action: crate::actions::PointerAction::MoveWindow,
+                ..
+            }
         ),
         "the drag must still start without a cursor shape device"
     );

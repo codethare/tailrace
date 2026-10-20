@@ -17,28 +17,31 @@ use crate::types::Status;
 use crate::wm::LayerShellFocus;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
-/// A new river seat appeared (river_window_manager_v1.seat event).
-pub fn seat_added(state: &mut AppData, qh: &QueueHandle<AppData>) {
-    if let Some(cursor) = state.wm.config.cursor.clone()
-        && let Some(seat) = &state.river_seat
-    {
-        seat.set_xcursor_theme(cursor.theme.clone(), cursor.size);
+/// A new river seat appeared (river_window_manager_v1.seat event): apply the
+/// per-seat setup that does not depend on input.
+pub fn seat_added(state: &mut AppData, river_seat: &RiverSeatV1, qh: &QueueHandle<AppData>) {
+    if let Some(cursor) = state.wm.config.cursor.clone() {
+        river_seat.set_xcursor_theme(cursor.theme.clone(), cursor.size);
     }
-    if let (Some(layer_shell), Some(seat)) = (&state.river_layer_shell, &state.river_seat) {
-        state.layer_shell_seat = Some(layer_shell.get_seat(seat, qh, ()));
+    let layer_shell = state.river_layer_shell.clone();
+    if let (Some(layer_shell), Some(seat_state)) = (layer_shell, state.seat_mut(river_seat)) {
+        seat_state.layer_shell_seat = Some(layer_shell.get_seat(river_seat, qh, ()));
     }
 }
 
 pub fn seat_event(
     state: &mut AppData,
-    _seat: &RiverSeatV1,
+    seat: &RiverSeatV1,
     event: <RiverSeatV1 as Proxy>::Event,
 ) -> bool {
     // Handled before the focus guards below: the wl_seat must be bound even
     // while no output or window exists yet (startup ordering, hotplug).
     if let river_seat_v1::Event::WlSeat { name } = event {
         let version = state.wl_seat_version;
-        state.wl_seat = Some(state.registry.bind(name, version, &state.qh, ()));
+        let wl_seat = state.registry.bind(name, version, &state.qh, ());
+        if let Some(seat_state) = state.seat_mut(seat) {
+            seat_state.wl_seat = Some(wl_seat);
+        }
         return false;
     }
     let (output_idx, workspace_idx) = match state.wm.current_ws_idx() {
@@ -110,7 +113,7 @@ pub fn seat_event(
         }
         river_seat_v1::Event::OpDelta { dx, dy } => {
             let action = match &state.wm.status {
-                Status::PointerAction(action) => *action,
+                Status::PointerAction { action, .. } => *action,
                 _ => return false,
             };
             apply_op_delta(
@@ -133,6 +136,7 @@ pub fn seat_event(
                 Status::TouchAction {
                     action,
                     touch_point: current,
+                    ..
                 } if current == touch_point => action,
                 _ => return false,
             };
@@ -162,19 +166,19 @@ pub fn seat_event(
                 state.wm.status,
                 Status::TouchAction { touch_point: current, .. } if current == touch_point
             ) {
-                end_op(state, output_idx, workspace_idx, focused_win_idx);
+                end_op(state, seat, output_idx, workspace_idx, focused_win_idx);
             }
             false
         }
         river_seat_v1::Event::Removed => {
-            seat_removed(state);
+            seat_removed(state, seat);
             false
         }
         river_seat_v1::Event::WlSeat { .. }
         | river_seat_v1::Event::ShellSurfaceInteraction { .. }
         | river_seat_v1::Event::PointerPosition { .. } => false,
         river_seat_v1::Event::OpRelease => {
-            end_op(state, output_idx, workspace_idx, focused_win_idx);
+            end_op(state, seat, output_idx, workspace_idx, focused_win_idx);
             false
         }
     }
@@ -226,7 +230,13 @@ fn apply_op_delta(
 }
 
 /// End an operation, keeping the geometry it reached.
-fn end_op(state: &mut AppData, output_idx: usize, workspace_idx: usize, window_idx: usize) {
+fn end_op(
+    state: &mut AppData,
+    seat: &RiverSeatV1,
+    output_idx: usize,
+    workspace_idx: usize,
+    window_idx: usize,
+) {
     if let Some(window) = state
         .wm
         .workspace_mut(output_idx, workspace_idx)
@@ -234,8 +244,11 @@ fn end_op(state: &mut AppData, output_idx: usize, workspace_idx: usize, window_i
     {
         window.geom.drag_origin = None;
     }
-    // Hand the cursor back to the focused client.
-    if let Some(device) = &state.cursor_shape {
+    // Hand the cursor back to the focused client, on the seat that dragged.
+    if let Some(device) = state
+        .seat(seat)
+        .and_then(|seat_state| seat_state.cursor_shape.as_ref())
+    {
         // river ignores the serial for the WM (river_seat_v1 v4).
         device.set_shape(0, Shape::Default);
     }
@@ -266,13 +279,20 @@ fn is_draggable(wm: &crate::wm::WindowManager, location: (usize, usize, usize)) 
 }
 
 /// Remember the geometry an interactive op starts from and take the cursor
-/// shape.
+/// shape. One op at a time: a second seat pressing a move binding while a drag
+/// runs is ignored instead of stealing the status.
 fn begin_op(state: &mut AppData, location: (usize, usize, usize), status: Status) -> bool {
-    let action = match status {
-        Status::PointerAction(action) => action,
-        Status::TouchAction { action, .. } => action,
+    let (action, seat) = match &status {
+        Status::PointerAction { action, seat } => (*action, seat.clone()),
+        Status::TouchAction { action, seat, .. } => (*action, seat.clone()),
         _ => return false,
     };
+    if matches!(
+        state.wm.status,
+        Status::PointerAction { .. } | Status::TouchAction { .. }
+    ) {
+        return false;
+    }
     if !is_draggable(&state.wm, location) {
         return false;
     }
@@ -287,7 +307,10 @@ fn begin_op(state: &mut AppData, location: (usize, usize, usize), status: Status
     window.geom.drag_origin = Some(window.geom.current);
     // Cursor feedback for the drag: river applies a WM-set shape while no
     // client has pointer focus, which is exactly during an op.
-    if let Some(device) = &state.cursor_shape {
+    if let Some(device) = state
+        .seat(&seat)
+        .and_then(|seat_state| seat_state.cursor_shape.as_ref())
+    {
         let shape = match action {
             PointerAction::MoveWindow => Shape::Move,
             PointerAction::ResizeWindow => Shape::NwseResize,
@@ -308,9 +331,9 @@ pub fn pointer_op_requested(
     seat: &RiverSeatV1,
     action: PointerAction,
 ) {
-    // op_start_pointer takes no seat argument, so a request from any other
-    // seat would drive the wrong device.
-    if state.river_seat.as_ref() != Some(seat) {
+    // Only a seat river handed us can own an operation: op_start_pointer is a
+    // request on that seat, not on a global.
+    if state.seat(seat).is_none() {
         return;
     }
     let Some(location) = state.wm.locate_window(window) else {
@@ -322,7 +345,14 @@ pub fn pointer_op_requested(
     // The op acts on the focused window (op_action reads it), so focus follows
     // the request.
     focus_window(state, window);
-    begin_op(state, location, Status::PointerAction(action));
+    begin_op(
+        state,
+        location,
+        Status::PointerAction {
+            action,
+            seat: seat.clone(),
+        },
+    );
 }
 
 /// The window asked to be moved or resized with a touch point.
@@ -333,7 +363,7 @@ pub fn touch_op_requested(
     touch_point: i32,
     action: PointerAction,
 ) {
-    if state.river_seat.as_ref() != Some(seat) {
+    if state.seat(seat).is_none() {
         return;
     }
     let Some(location) = state.wm.locate_window(window) else {
@@ -349,63 +379,102 @@ pub fn touch_op_requested(
         Status::TouchAction {
             action,
             touch_point,
+            seat: seat.clone(),
         },
     );
 }
-/// Rebuild pointer bindings from config (rill-ed setupPointerBindings).
+/// Rebuild pointer bindings from config (rill-ed setupPointerBindings), for
+/// every seat: each one drives its own devices.
 pub fn setup_pointer_bindings(state: &mut AppData) {
-    for binding in state.pointer_bindings.drain(..) {
-        binding.proxy.destroy();
-    }
-    let Some(seat) = state.river_seat.clone() else {
-        return;
-    };
-    for binding in &state.wm.config.pointer_bindings {
-        let Ok(mods) = crate::keybinding::parse_modifiers(&binding.modifiers) else {
-            eprintln!(
-                "tailrace: invalid modifiers {:?} in pointer binding",
-                binding.modifiers
-            );
-            continue;
-        };
-        let proxy = seat.get_pointer_binding(binding.button.code(), mods, &state.qh, ());
-        proxy.enable();
-        state.pointer_bindings.push(PointerBindingEntry {
-            proxy,
-            action: binding.action,
-        });
+    // Cloned so the seat list can be borrowed mutably below.
+    let qh = state.qh.clone();
+    let config = state.wm.config.clone();
+    for seat_state in &mut state.seats {
+        for binding in seat_state.pointer_bindings.drain(..) {
+            binding.proxy.destroy();
+        }
+        for binding in &config.pointer_bindings {
+            let Ok(mods) = crate::keybinding::parse_modifiers(&binding.modifiers) else {
+                eprintln!(
+                    "tailrace: invalid modifiers {:?} in pointer binding",
+                    binding.modifiers
+                );
+                continue;
+            };
+            let proxy =
+                seat_state
+                    .river_seat
+                    .get_pointer_binding(binding.button.code(), mods, &qh, ());
+            proxy.enable();
+            seat_state.pointer_bindings.push(PointerBindingEntry {
+                proxy,
+                action: binding.action,
+            });
+        }
     }
 }
 
 fn pointer_binding_action(state: &AppData, proxy: &RiverPointerBindingV1) -> Option<PointerAction> {
+    state.seats.iter().find_map(|seat_state| {
+        seat_state
+            .pointer_bindings
+            .iter()
+            .find(|b| &b.proxy == proxy)
+            .map(|b| b.action)
+    })
+}
+
+/// The seat that owns a pointer binding.
+fn pointer_binding_seat(state: &AppData, proxy: &RiverPointerBindingV1) -> Option<RiverSeatV1> {
     state
-        .pointer_bindings
+        .seats
         .iter()
-        .find(|b| &b.proxy == proxy)
-        .map(|b| b.action)
+        .find(|seat_state| {
+            seat_state
+                .pointer_bindings
+                .iter()
+                .any(|b| &b.proxy == proxy)
+        })
+        .map(|seat_state| seat_state.river_seat.clone())
 }
 
 /// The seat is gone. river expects the window manager to destroy everything
-/// derived from it before it hands out a seat object again (its manageStart
+/// derived from it before it hands the object name out again (its manageStart
 /// asserts that the previous bindings are gone), and a stale seat proxy would
-/// silently swallow focus requests.
-fn seat_removed(state: &mut AppData) {
-    for binding in state.xkb_bindings.drain(..) {
+/// silently swallow focus requests. Other seats are untouched: a transient
+/// seat going away must not take the physical one's bindings with it.
+fn seat_removed(state: &mut AppData, seat: &RiverSeatV1) {
+    let Some(idx) = state.seats.iter().position(|s| &s.river_seat == seat) else {
+        return;
+    };
+    let seat_state = state.seats.remove(idx);
+    for binding in seat_state.xkb_bindings {
         binding.proxy.destroy();
     }
-    for binding in state.pointer_bindings.drain(..) {
+    for binding in seat_state.pointer_bindings {
         binding.proxy.destroy();
     }
-    if let Some(seat) = state.river_seat.take() {
-        seat.destroy();
+    if let Some(pointer) = seat_state.wl_pointer
+        && pointer.version() >= 3
+    {
+        pointer.release();
     }
-    state.layer_shell_seat = None;
-    state.wl_seat = None;
-    state.wl_pointer = None;
-    state.cursor_shape = None;
-    // The next seat needs focus handed to it again.
-    state.wm.layer_shell_focus = LayerShellFocus::None;
-    state.wm.last_focused_window = None;
+    if let Some(layer_shell_seat) = seat_state.layer_shell_seat {
+        layer_shell_seat.destroy();
+    }
+    seat.destroy();
+    // An operation cannot outlive the seat that owns it: river will not send
+    // its deltas any more, and the next manage pass would ask a destroyed
+    // proxy to start one.
+    let owns_op = match &state.wm.status {
+        Status::PointerAction { seat: op, .. } | Status::TouchAction { seat: op, .. } => op == seat,
+        _ => false,
+    };
+    if owns_op {
+        state.wm.status = Status::Layout;
+    }
+    // The surviving seats' caches are still valid, but the pass after a seat
+    // comes or goes is the cheapest place to re-assert keyboard focus.
     state.wm.needs_refocus = true;
 }
 
@@ -455,25 +524,29 @@ fn focus_window(state: &mut AppData, window: &RiverWindowV1) -> bool {
 
 pub fn layer_shell_seat_event(
     state: &mut AppData,
+    seat: &RiverLayerShellSeatV1,
     event: <RiverLayerShellSeatV1 as Proxy>::Event,
 ) -> bool {
     use crate::river::river_layer_shell_seat_v1::Event;
+    let Some(idx) = state.seat_index_by_layer_shell_seat(seat) else {
+        return false;
+    };
     match event {
         Event::FocusExclusive => {
-            state.wm.layer_shell_focus = LayerShellFocus::Exclusive;
+            state.seats[idx].layer_shell_focus = LayerShellFocus::Exclusive;
             state.wm.status = Status::Layout;
             false
         }
         Event::FocusNonExclusive => {
-            state.wm.layer_shell_focus = LayerShellFocus::NonExclusive;
+            state.seats[idx].layer_shell_focus = LayerShellFocus::NonExclusive;
             state.wm.status = Status::Layout;
             false
         }
         Event::FocusNone => {
-            state.wm.layer_shell_focus = LayerShellFocus::None;
-            // Exclusive layer-shell focus was revoked; invalidate the stale
-            // focus cache so focus_window is re-issued.
-            state.wm.last_focused_window = None;
+            state.seats[idx].layer_shell_focus = LayerShellFocus::None;
+            // Exclusive layer-shell focus was revoked on this seat; invalidate
+            // its stale focus cache so focus_window is re-issued.
+            state.seats[idx].last_focused_window = None;
             state.wm.needs_refocus = true;
             state.wm.status = Status::Layout;
             true
@@ -557,6 +630,10 @@ impl Dispatch<RiverPointerBindingV1, ()> for AppData {
         let Some(action) = pointer_binding_action(state, proxy) else {
             return;
         };
+        // The drag belongs to the seat whose binding fired.
+        let Some(seat) = pointer_binding_seat(state, proxy) else {
+            return;
+        };
         // Drag the focused window; begin_op rejects tiled and fullscreen ones.
         let Some(location) = state.wm.current_ws_idx().and_then(|(o, w)| {
             state
@@ -567,20 +644,20 @@ impl Dispatch<RiverPointerBindingV1, ()> for AppData {
         }) else {
             return;
         };
-        begin_op(state, location, Status::PointerAction(action));
+        begin_op(state, location, Status::PointerAction { action, seat });
     }
 }
 
 impl Dispatch<RiverLayerShellSeatV1, ()> for AppData {
     fn event(
         state: &mut Self,
-        _proxy: &RiverLayerShellSeatV1,
+        proxy: &RiverLayerShellSeatV1,
         event: <RiverLayerShellSeatV1 as Proxy>::Event,
         _data: &(),
         _conn: &wayland_client::Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        let needs_manage = layer_shell_seat_event(state, event);
+        let needs_manage = layer_shell_seat_event(state, proxy, event);
         if needs_manage {
             state.manage_dirty();
         }

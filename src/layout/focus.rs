@@ -3,16 +3,20 @@
 
 //! Border colours, keyboard focus and raise order.
 
+use crate::app::SeatState;
 use crate::layout::common;
 use crate::river::river_node_v1::RiverNodeV1;
-use crate::river::river_seat_v1::RiverSeatV1;
 use crate::types::{Color, Window, WindowGeom};
 use crate::wm::{LayerShellFocus, WindowManager};
 
 /// Set border colors and keyboard focus to match the current focused
 /// window/output. Safe to call every manage pass: redundant border and focus
 /// requests are skipped so IME clients (fcitx5) are not disrupted.
-pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seat: &RiverSeatV1) {
+///
+/// Keyboard focus goes to *every* seat: river tracks it per seat, so a seat
+/// that is never told (a transient one for a remote session) would keep
+/// keyboard focus on whatever it had.
+pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seats: &mut [SeatState]) {
     let Some(foi) = wm.focused_output_idx else {
         return;
     };
@@ -72,10 +76,6 @@ pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seat: &RiverSeatV1
         }
     }
 
-    // Only send focus commands when the target actually changes.
-    if wm.layer_shell_focus == LayerShellFocus::Exclusive {
-        return;
-    }
     // Skip focus management while the session is locked; the lock surface
     // has exclusive keyboard focus managed by the compositor.
     if wm.session_locked {
@@ -94,13 +94,18 @@ pub(super) fn apply_focus_and_borders(wm: &mut WindowManager, seat: &RiverSeatV1
                 .map(|w| w.river_window.clone())
         };
 
-    if desired_focus != wm.last_focused_window {
-        if let Some(window) = &desired_focus {
-            seat.focus_window(window);
-        } else if wm.layer_shell_focus != LayerShellFocus::NonExclusive {
-            seat.clear_focus();
+    for seat_state in seats.iter_mut() {
+        if seat_state.layer_shell_focus == LayerShellFocus::Exclusive {
+            continue;
         }
-        wm.last_focused_window = desired_focus;
+        if desired_focus != seat_state.last_focused_window {
+            if let Some(window) = &desired_focus {
+                seat_state.river_seat.focus_window(window);
+            } else if seat_state.layer_shell_focus != LayerShellFocus::NonExclusive {
+                seat_state.river_seat.clear_focus();
+            }
+            seat_state.last_focused_window = desired_focus.clone();
+        }
     }
 }
 

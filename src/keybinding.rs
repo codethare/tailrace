@@ -33,21 +33,23 @@ pub fn parse_modifiers(names: &[String]) -> Result<crate::river::river_seat_v1::
 /// is open (Return to confirm, Escape to cancel, vi navigation). They are
 /// registered but kept disabled otherwise so apps keep receiving those keys.
 pub fn set_overview_keybinds(state: &mut crate::app::AppData, enabled: bool) {
-    for binding in &state.xkb_bindings {
-        let overview_only = matches!(
-            binding.action,
-            KeybindingAction::OverviewConfirm
-                | KeybindingAction::OverviewCancel
-                | KeybindingAction::OverviewNavUp
-                | KeybindingAction::OverviewNavDown
-                | KeybindingAction::OverviewNavLeft
-                | KeybindingAction::OverviewNavRight
-        );
-        if overview_only {
-            if enabled {
-                binding.proxy.enable();
-            } else {
-                binding.proxy.disable();
+    for seat_state in &state.seats {
+        for binding in &seat_state.xkb_bindings {
+            let overview_only = matches!(
+                binding.action,
+                KeybindingAction::OverviewConfirm
+                    | KeybindingAction::OverviewCancel
+                    | KeybindingAction::OverviewNavUp
+                    | KeybindingAction::OverviewNavDown
+                    | KeybindingAction::OverviewNavLeft
+                    | KeybindingAction::OverviewNavRight
+            );
+            if overview_only {
+                if enabled {
+                    binding.proxy.enable();
+                } else {
+                    binding.proxy.disable();
+                }
             }
         }
     }
@@ -61,36 +63,40 @@ pub fn parse_key(key: &str) -> Option<u32> {
     (keysym.raw() != 0).then_some(keysym.raw())
 }
 
-/// Rebuild xkb bindings from config (rill-ed setupKeybindings).
+/// Rebuild xkb bindings from config (rill-ed setupKeybindings), for every seat:
+/// a key pressed on the remote session's seat must do the same thing as one
+/// pressed on the physical seat.
 pub fn setup_keybindings(state: &mut crate::app::AppData) {
-    for binding in state.xkb_bindings.drain(..) {
-        binding.proxy.destroy();
-    }
+    // Cloned so the seat list can be borrowed mutably below.
+    let qh = state.qh.clone();
+    let config = state.wm.config.clone();
     let Some(xkb_bindings) = state.river_xkb.clone() else {
         eprintln!("tailrace: river_xkb_bindings_v1 missing, no keybindings");
         return;
     };
-    let Some(seat) = state.river_seat.clone() else {
-        return;
-    };
-    for kb in &state.wm.config.keybindings {
-        let Some(keysym) = parse_key(&kb.key) else {
-            eprintln!("tailrace: unknown keysym '{}'", kb.key);
-            continue;
-        };
-        let Ok(mods) = parse_modifiers(&kb.modifiers) else {
-            eprintln!(
-                "tailrace: invalid modifiers {:?} for key '{}'",
-                kb.modifiers, kb.key
-            );
-            continue;
-        };
-        let proxy = xkb_bindings.get_xkb_binding(&seat, keysym, mods, &state.qh, ());
-        proxy.enable();
-        state.xkb_bindings.push(crate::app::XkbBinding {
-            proxy,
-            action: kb.action.clone(),
-        });
+    for seat_state in &mut state.seats {
+        for binding in seat_state.xkb_bindings.drain(..) {
+            binding.proxy.destroy();
+        }
+        for kb in &config.keybindings {
+            let Some(keysym) = parse_key(&kb.key) else {
+                eprintln!("tailrace: unknown keysym '{}'", kb.key);
+                continue;
+            };
+            let Ok(mods) = parse_modifiers(&kb.modifiers) else {
+                eprintln!(
+                    "tailrace: invalid modifiers {:?} for key '{}'",
+                    kb.modifiers, kb.key
+                );
+                continue;
+            };
+            let proxy = xkb_bindings.get_xkb_binding(&seat_state.river_seat, keysym, mods, &qh, ());
+            proxy.enable();
+            seat_state.xkb_bindings.push(crate::app::XkbBinding {
+                proxy,
+                action: kb.action.clone(),
+            });
+        }
     }
     // Overview-only keys start disabled; enter() enables them.
     set_overview_keybinds(state, false);
@@ -100,11 +106,13 @@ fn binding_action(
     state: &crate::app::AppData,
     proxy: &crate::river::river_xkb_binding_v1::RiverXkbBindingV1,
 ) -> Option<KeybindingAction> {
-    state
-        .xkb_bindings
-        .iter()
-        .find(|b| &b.proxy == proxy)
-        .map(|b| b.action.clone())
+    state.seats.iter().find_map(|seat_state| {
+        seat_state
+            .xkb_bindings
+            .iter()
+            .find(|b| &b.proxy == proxy)
+            .map(|b| b.action.clone())
+    })
 }
 
 /// Dispatch a pressed binding (rill-ed xkbBindingListener).
@@ -117,7 +125,7 @@ pub fn binding_pressed(
     // Pointer and touch ops swallow keyboard events.
     if matches!(
         state.wm.status,
-        Status::PointerAction(_) | Status::TouchAction { .. }
+        Status::PointerAction { .. } | Status::TouchAction { .. }
     ) {
         return;
     }
@@ -153,10 +161,12 @@ fn reload_config(state: &mut crate::app::AppData) {
     };
     state.wm.config = std::rc::Rc::new(new_config);
 
-    if let Some(cursor) = state.wm.config.cursor.clone()
-        && let Some(seat) = &state.river_seat
-    {
-        seat.set_xcursor_theme(cursor.theme.clone(), cursor.size);
+    if let Some(cursor) = state.wm.config.cursor.clone() {
+        for seat_state in &state.seats {
+            seat_state
+                .river_seat
+                .set_xcursor_theme(cursor.theme.clone(), cursor.size);
+        }
     }
     crate::layout::update(&mut state.wm);
 

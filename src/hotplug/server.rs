@@ -251,6 +251,25 @@ impl MiniServer {
         self.next_global
     }
 
+    /// A second wl_seat global, for the seats river creates at runtime
+    /// (ext-transient-seat-v1). Returns the global name to hand to the seat.
+    pub(super) fn add_wl_seat_global(&mut self) -> u32 {
+        self.next_global += 1;
+        let label: &'static str =
+            Box::leak(format!("wl_seat:{}", self.next_global).into_boxed_str());
+        self.backend.handle().create_global(
+            &WL_SEAT_INTERFACE,
+            9,
+            GenericGlobal::labeled(
+                self.bind_log.clone(),
+                label,
+                self.children.clone(),
+                self.request_log.clone(),
+            ),
+        );
+        self.next_global
+    }
+
     pub(super) fn create_object(
         &mut self,
         interface: &'static wayland_backend::protocol::Interface,

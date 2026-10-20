@@ -7,6 +7,7 @@ use crate::actions::{Button, KeybindingAction, PointerAction};
 use crate::river::river_layer_shell_output_v1::RiverLayerShellOutputV1;
 use crate::river::river_node_v1::RiverNodeV1;
 use crate::river::river_output_v1::RiverOutputV1;
+use crate::river::river_seat_v1::RiverSeatV1;
 use crate::river::river_window_v1::RiverWindowV1;
 use crate::river::wl_output::WlOutput;
 
@@ -236,11 +237,18 @@ pub struct OverviewHome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     Layout,
-    PointerAction(PointerAction),
+    /// The seat that began the operation is carried along: river keeps pointer
+    /// operations per seat, and `op_start_pointer`/`op_end` are requests on the
+    /// seat that owns the op.
+    PointerAction {
+        action: PointerAction,
+        seat: RiverSeatV1,
+    },
     /// The touch point is carried along so delta events for other points are ignored.
     TouchAction {
         action: PointerAction,
         touch_point: i32,
+        seat: RiverSeatV1,
     },
     Overview,
     SetupBindings,
