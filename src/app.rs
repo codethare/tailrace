@@ -337,8 +337,10 @@ pub fn manage(state: &mut AppData) {
 
     // Handled only once the prerequisites exist: the seat event sets this flag,
     // but manage returns early (dropping the request) while no output is
-    // focused yet.
-    if state.wm.needs_setup_bindings {
+    // focused yet. A sequence that already owns the status keeps it: rebuilding
+    // bindings mid-drag would abort the drag, and mid-overview would leave the
+    // overview without its keys, so the flag waits for a free pass.
+    if state.wm.needs_setup_bindings && matches!(state.wm.status, Status::Layout | Status::None) {
         state.wm.status = Status::SetupBindings;
         state.wm.needs_setup_bindings = false;
     }

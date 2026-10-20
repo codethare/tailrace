@@ -98,8 +98,10 @@ pub fn setup_keybindings(state: &mut crate::app::AppData) {
             });
         }
     }
-    // Overview-only keys start disabled; enter() enables them.
-    set_overview_keybinds(state, false);
+    // Overview-only keys are only usable while the overview is open. A rebuild
+    // can land while it is (a seat arrives, the config is reloaded), so follow
+    // the current state instead of assuming the overview is closed.
+    set_overview_keybinds(state, state.wm.overview_state.is_some());
 }
 
 fn binding_action(

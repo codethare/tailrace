@@ -327,3 +327,93 @@ fn removing_a_seat_mid_operation_ends_the_operation() {
     assert_eq!(s.state.wm.status, crate::types::Status::None);
     s.check_consistent();
 }
+
+/// A seat arriving mid-drag must not abort the drag. Rebuilding bindings takes
+/// the manage sequence, and taking it while an operation owns the status ends
+/// the operation: the window stopped following the pointer.
+#[test]
+fn a_seat_arriving_mid_drag_does_not_abort_the_drag() {
+    let (mut s, mut sv, primary, _transient) = two_seats();
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::ToggleWorkspaceFloating,
+    );
+    s.manage(&mut sv);
+
+    let move_binding = live(&sv, "river_pointer_binding_v1")[0].clone();
+    s.send(&mut sv, move_binding, EVT_PTR_BINDING_PRESSED, vec![]);
+    s.manage(&mut sv);
+    let dragging = s.state.wm.status.clone();
+    assert!(matches!(
+        dragging,
+        crate::types::Status::PointerAction { .. }
+    ));
+
+    // A remote session connects while the button is still down.
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    assert_eq!(
+        s.state.wm.status, dragging,
+        "the drag keeps the sequence it owns"
+    );
+
+    // Releasing ends the drag as usual, and the deferred rebuild then happens.
+    s.send(&mut sv, primary, EVT_SEAT_OP_RELEASE, vec![]);
+    assert_eq!(s.state.wm.status, crate::types::Status::None);
+    s.manage(&mut sv);
+    assert!(
+        s.state.seats[1].xkb_bindings.len() > 50,
+        "the seat that arrived during the drag gets its bindings afterwards"
+    );
+    s.check_consistent();
+}
+
+/// The overview keeps working when bindings are rebuilt while it is open: its
+/// bare keys must not be disabled under it.
+#[test]
+fn an_open_overview_survives_a_seat_arrival() {
+    let (mut s, mut sv, _primary, _transient) = two_seats();
+    s.add_window(&mut sv);
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::EnterOverview,
+    );
+    s.manage(&mut sv);
+    assert!(s.state.wm.overview_state.is_some(), "overview is open");
+
+    s.add_seat(&mut sv);
+    s.manage(&mut sv);
+    assert!(
+        s.state.wm.overview_state.is_some(),
+        "the overview is still open"
+    );
+    let disabled = live(&sv, "river_xkb_binding_v1")
+        .into_iter()
+        .filter(|binding| count_requests(&sv, binding, REQ_XKB_DISABLE) > 0)
+        .count();
+    assert_eq!(
+        disabled, 0,
+        "no overview key may be disabled while it is open"
+    );
+
+    // And the bare keys really do something: nav-right moves the highlight to
+    // the second of the two windows (they share one grid row).
+    let index = crate::keybinding::default_keybindings()
+        .iter()
+        .position(|kb| kb.action == crate::actions::KeybindingAction::OverviewNavRight)
+        .expect("nav-right has a default binding");
+    let binding = live(&sv, "river_xkb_binding_v1")[index].clone();
+    s.send(&mut sv, binding, EVT_XKB_BINDING_PRESSED, vec![]);
+    s.manage(&mut sv);
+    assert_eq!(
+        s.state
+            .wm
+            .overview_state
+            .as_ref()
+            .expect("overview open")
+            .highlighted,
+        1,
+        "the key still navigates the overview"
+    );
+}
