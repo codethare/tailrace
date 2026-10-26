@@ -478,10 +478,11 @@ fn seat_removed(state: &mut AppData, seat: &RiverSeatV1) {
     state.wm.needs_refocus = true;
 }
 
-/// Focus the window under the pointer/click, wherever it lives (any output,
-/// any workspace). Mirrors rill-ed click-to-focus: switches the focused
-/// output and remembers the previous workspace for cross-output moves.
-/// Returns true if focus actually changed.
+/// Focus a window wherever it lives, any output and any workspace: the
+/// pointer/click path, the MRU actions and the control socket all enter here.
+/// Follows the window to its workspace and remembers the one left behind as
+/// `previous_workspace`, the same as the keybinding switches. Returns true if
+/// focus actually changed.
 pub(crate) fn focus_window(state: &mut AppData, window: &RiverWindowV1) -> bool {
     if state
         .wm
@@ -491,35 +492,24 @@ pub(crate) fn focus_window(state: &mut AppData, window: &RiverWindowV1) -> bool 
     {
         return false;
     }
-    let Some((output_idx, workspace_idx)) = state.wm.current_ws_idx() else {
+    let Some((output_idx, workspace_idx, window_idx)) = state.wm.locate_window(window) else {
         return false;
     };
-    for target_output_idx in 0..state.wm.outputs.len() {
-        let target_ws_idx = state.wm.outputs[target_output_idx].focused_workspace_idx;
-        let Some(target_win_idx) = state
-            .wm
-            .workspace(target_output_idx, target_ws_idx)
-            .unwrap()
-            .window_list
-            .iter()
-            .position(|w| w.river_window == *window)
-        else {
-            continue;
-        };
+    let previous = state.wm.current_ws_idx();
+    state.wm.focused_output_idx = Some(output_idx);
+    state.wm.outputs[output_idx].focused_workspace_idx = workspace_idx;
+    state.wm.outputs[output_idx].workspace_list[workspace_idx].focused_window_idx =
+        Some(window_idx);
 
-        state.wm.focused_output_idx = Some(target_output_idx);
-        state.wm.outputs[target_output_idx].workspace_list[target_ws_idx].focused_window_idx =
-            Some(target_win_idx);
-
-        if target_output_idx != output_idx {
-            state.wm.previous_workspace = Some(crate::types::OverviewHome {
-                output_idx,
-                workspace_idx,
-            });
-        }
-        return true;
+    if let Some((prev_output_idx, prev_workspace_idx)) = previous
+        && (prev_output_idx, prev_workspace_idx) != (output_idx, workspace_idx)
+    {
+        state.wm.previous_workspace = Some(crate::types::OverviewHome {
+            output_idx: prev_output_idx,
+            workspace_idx: prev_workspace_idx,
+        });
     }
-    false
+    true
 }
 
 pub fn layer_shell_seat_event(

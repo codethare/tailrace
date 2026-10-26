@@ -198,6 +198,56 @@ fn focus_is_the_only_write_verb() {
     }
 }
 
+/// `focus <id>` reaches a window on another workspace of the same output: the
+/// menu lists every workspace, so picking one has to move there. The workspace
+/// left behind becomes the previous workspace, as with a keybinding switch.
+#[test]
+fn focus_reaches_a_window_on_another_workspace() {
+    let (mut s, mut sv, _windows) = scene(2);
+    // id-1 onto workspace 2, then back to workspace 1, where only id-0 lives.
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::MoveWindowToWorkspaceNumber(2),
+    );
+    s.manage(&mut sv);
+    crate::keybinding::dispatch_action(
+        &mut s.state,
+        &crate::actions::KeybindingAction::FocusWorkspaceNumber(1),
+    );
+    s.manage(&mut sv);
+    assert_eq!(s.state.wm.current_ws_idx(), Some((0, 0)));
+    assert!(
+        request(&mut s, "windows")
+            .lines()
+            .any(|line| line.starts_with("id-1\t") && line.contains("\tA:2\t")),
+        "the other workspace is listed"
+    );
+
+    assert_eq!(request(&mut s, "focus id-1"), "ok\n");
+    s.manage(&mut sv);
+
+    assert_eq!(
+        s.state.wm.current_ws_idx(),
+        Some((0, 1)),
+        "focus follows the window to its workspace"
+    );
+    assert_eq!(
+        s.state
+            .wm
+            .focused_window()
+            .and_then(|w| w.identifier.as_deref()),
+        Some("id-1")
+    );
+    assert_eq!(
+        s.state
+            .wm
+            .previous_workspace
+            .map(|p| (p.output_idx, p.workspace_idx)),
+        Some((0, 0))
+    );
+    s.check_consistent();
+}
+
 /// An identifier that never existed, and one whose window has closed, are both
 /// errors: a menu must not be able to hit a different window by mistake.
 #[test]
