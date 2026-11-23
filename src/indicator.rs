@@ -244,6 +244,12 @@ fn show(state: &mut AppData, plan: Plan) {
             return;
         };
         let surface = compositor.create_surface(&state.qh, ());
+        // Click-through: the card is informational. Without this the whole
+        // rectangle is an input region, so it swallows clicks (including a
+        // window's titlebar or close button) for as long as it is visible.
+        let empty = compositor.create_region(&state.qh, ());
+        surface.set_input_region(Some(&empty));
+        empty.destroy();
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
             wl_output.as_ref(),

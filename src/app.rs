@@ -308,6 +308,7 @@ wayland_client::delegate_noop!(AppData: ignore WlShm);
 wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_shm_pool::WlShmPool);
 wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_buffer::WlBuffer);
 wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_surface::WlSurface);
+wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_region::WlRegion);
 wayland_client::delegate_noop!(AppData: ignore ZwlrLayerShellV1);
 
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppData {
