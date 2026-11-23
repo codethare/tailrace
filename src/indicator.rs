@@ -35,31 +35,19 @@ use crate::wm::WindowManager;
 /// not to sit in the way.
 pub const SHOW_FOR: Duration = Duration::from_millis(1500);
 
-const CARD_HEIGHT: i32 = 30;
-const CARD_RADIUS: f32 = 15.0;
+const CARD_HEIGHT: i32 = 16;
 const CARD_PADDING: f32 = 10.0;
 const SIDE_MARGIN: i32 = 8;
 const TOP_MARGIN: i32 = 8;
-const MIN_CARD_WIDTH: i32 = 200;
-const MAX_CARD_WIDTH: i32 = 400;
-/// Height of one drawn window, and the vertical band the viewport overlays.
-const MINI_HEIGHT: f32 = 12.0;
-const MINI_Y: f32 = 9.0;
-const VIEWPORT_Y: f32 = 6.0;
-const VIEWPORT_HEIGHT: f32 = 18.0;
-
-const CARD_BG: Color = Color {
-    r: 18,
-    g: 20,
-    b: 26,
-    a: 0.82,
-};
-const CARD_EDGE: Color = Color {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 0.10,
-};
+const MIN_CARD_WIDTH: i32 = 180;
+const MAX_CARD_WIDTH: i32 = 360;
+/// The workspace is one thin line; the viewport is a separate border around
+/// the part of it that is on screen.
+const TRACK_HEIGHT: f32 = 2.0;
+const TRACK_Y: f32 = 7.0;
+const VIEWPORT_HEIGHT: f32 = 12.0;
+const VIEWPORT_Y: f32 = 2.0;
+const VIEWPORT_INSET: f32 = 2.0;
 
 pub struct Indicator {
     /// Focus the card reflects. Stored even while the feature is off, so
@@ -440,7 +428,7 @@ pub fn build_plan(
         return None;
     }
 
-    // Two fifths of the usable width, capped: a compact strip, not a panel.
+    // Two fifths of the usable width, capped: a compact line, not a panel.
     let target = (output_width * 2 / 5).clamp(MIN_CARD_WIDTH, MAX_CARD_WIDTH);
     let available = output_width - 2 * SIDE_MARGIN;
     let width = target.min(available).max(80);
@@ -474,51 +462,42 @@ pub fn build_plan(
 // Software rendering into ARGB8888, premultiplied as wl_shm requires.
 // ---------------------------------------------------------------------------
 
-/// Render a card into premultiplied ARGB8888 pixels.
+/// Render the indicator into premultiplied ARGB8888 pixels.
 pub fn render(plan: &Plan, config: &Config) -> Vec<u32> {
     let mut canvas = Canvas::new(plan.width, plan.height);
-    canvas.rounded_rect(
-        Shape::new(0.0, 0.0, plan.width as f32, plan.height as f32),
-        CARD_RADIUS,
-        CARD_BG,
-    );
-    canvas.rounded_stroke(
-        Shape::new(0.5, 0.5, plan.width as f32 - 1.0, plan.height as f32 - 1.0),
-        CARD_RADIUS - 0.5,
-        1.0,
-        CARD_EDGE,
-    );
 
-    for window in &plan.windows {
-        let mut color = if window.focused {
-            config.border.focused_color
-        } else {
-            config.border.unfocused_color
-        };
-        if !window.focused {
-            // Unfocused windows recede; the focused one is the anchor.
-            color.a *= 0.32;
-        }
+    // One continuous line for the whole workspace strip. The focused window
+    // is a brighter run on it; window boundaries stay implicit in the line.
+    if let (Some(first), Some(last)) = (plan.windows.first(), plan.windows.last()) {
+        let start = first.x;
+        let mut track = config.border.unfocused_color;
+        track.a = (track.a * 0.50).min(0.55);
         canvas.rounded_rect(
-            Shape::new(window.x, MINI_Y, window.width, MINI_HEIGHT),
-            MINI_HEIGHT * 0.5,
+            Shape::new(start, TRACK_Y, last.x + last.width - start, TRACK_HEIGHT),
+            TRACK_HEIGHT * 0.5,
+            track,
+        );
+    }
+    if let Some(window) = plan.windows.iter().find(|window| window.focused) {
+        let mut color = config.border.focused_color;
+        color.a = (color.a * 0.95).min(0.95);
+        canvas.rounded_rect(
+            Shape::new(window.x, TRACK_Y, window.width, TRACK_HEIGHT),
+            TRACK_HEIGHT * 0.5,
             color,
         );
     }
 
-    // The viewport sits *on top of* the window strip, not in a separate row:
-    // it marks exactly which horizontal slice is on screen.
-    let mut fill = config.border.focused_color;
-    fill.a = (fill.a * 0.14).min(0.20);
+    // The current screen is a separate rounded border wrapped around the
+    // matching run of the line, not another row.
+    let mut edge = config.border.focused_color;
+    edge.a = (edge.a * 0.90).min(0.90);
     let viewport = Shape::new(
-        plan.viewport_x,
+        plan.viewport_x - VIEWPORT_INSET,
         VIEWPORT_Y,
-        plan.viewport_width,
+        plan.viewport_width + 2.0 * VIEWPORT_INSET,
         VIEWPORT_HEIGHT,
     );
-    canvas.rounded_rect(viewport, VIEWPORT_HEIGHT * 0.5, fill);
-    let mut edge = config.border.focused_color;
-    edge.a = edge.a.min(0.55);
     canvas.rounded_stroke(viewport, VIEWPORT_HEIGHT * 0.5, 1.0, edge);
 
     canvas.pixels
@@ -753,11 +732,15 @@ mod tests {
         let plan = build_plan(viewport(), &windows, Some(0), 1920).unwrap();
         let pixels = render(&plan, &Config::default());
         assert_eq!(pixels.len(), plan.width as usize * plan.height as usize);
-        // Centre of the card is (nearly) opaque: card 0.90 alpha plus the
-        // viewport fill on top.
-        let idx = (plan.height as usize / 2) * plan.width as usize + plan.width as usize / 2;
-        assert!(pixels[idx] >> 24 > 200, "alpha = {}", pixels[idx] >> 24);
-        // Rounded corners are fully transparent.
+        // A point on the line (inside the first window) is painted.
+        let idx = (TRACK_Y as usize + 1) * plan.width as usize + plan.width as usize / 4;
+        assert!(pixels[idx] >> 24 > 0);
+        // The viewport border is painted above the line, not a filled card.
+        let top = VIEWPORT_Y as usize * plan.width as usize
+            + (plan.viewport_x + plan.viewport_width / 2.0) as usize;
+        assert!(pixels[top] >> 24 > 0, "viewport border missing");
+        // Nothing else is: the surface is transparent outside the line and
+        // the border.
         assert_eq!(pixels[0] >> 24, 0);
         assert_eq!(pixels[pixels.len() - 1] >> 24, 0);
     }

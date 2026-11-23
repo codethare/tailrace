@@ -36,8 +36,9 @@ protocol. A port of [rill-ed](https://github.com/codethare/rill-ed) (Zig) with
 * Preset column widths, cycled with one key; center, expand and maximize-to-edges on demand
 * Named workspaces, and moving a workspace to another output
 * Focus follows the mouse pointer (opt-in, sloppy focus)
-* Overflow card: when focus moves and the workspace has windows off-screen, a
-  card at the top of the output shows every window and the visible viewport
+* Overflow indicator: when focus moves and the workspace has windows
+  off-screen, a thin line at the top of the output shows the strip and outlines
+  the visible viewport
 * Session-lock focus save/restore
 
 ## Building
@@ -127,7 +128,7 @@ the error is printed.
 | `always_center_single_column` | `false` | Center a workspace that holds a single window, whatever `center_focused_window` says |
 | `preset_column_widths` | 1/3, 1/2, 2/3 | Widths `switch_preset_column_width` cycles through: `{ proportion = 0.5 }` of the output or `{ fixed = 1280 }` pixels |
 | `focus_follows_pointer` | `false` | Keyboard focus follows the mouse pointer (sloppy focus) |
-| `overflow_indicator` | `true` | Show the off-screen window card after a focus move |
+| `overflow_indicator` | `true` | Show the off-screen strip line after a focus move |
 | `no_csd` | `true` | Disable client side decorations |
 | `border.width` | `3` | Border width in pixels |
 | `border.focused_color`, `border.unfocused_color` | | `{ r, g, b, a }` with 0–255 channels and 0.0–1.0 alpha |
