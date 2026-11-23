@@ -35,24 +35,24 @@ use crate::wm::WindowManager;
 /// not to sit in the way.
 pub const SHOW_FOR: Duration = Duration::from_millis(1500);
 
-const CARD_HEIGHT: i32 = 48;
-const CARD_RADIUS: f32 = 12.0;
-const CARD_PADDING: f32 = 12.0;
-const SIDE_MARGIN: i32 = 10;
-const TOP_MARGIN: i32 = 10;
-const MIN_CARD_WIDTH: i32 = 300;
-const MAX_CARD_WIDTH: i32 = 680;
+const CARD_HEIGHT: i32 = 30;
+const CARD_RADIUS: f32 = 15.0;
+const CARD_PADDING: f32 = 10.0;
+const SIDE_MARGIN: i32 = 8;
+const TOP_MARGIN: i32 = 8;
+const MIN_CARD_WIDTH: i32 = 200;
+const MAX_CARD_WIDTH: i32 = 400;
 /// Height of one drawn window, and the vertical band the viewport overlays.
-const MINI_HEIGHT: f32 = 20.0;
-const MINI_Y: f32 = 14.0;
-const VIEWPORT_Y: f32 = 10.0;
-const VIEWPORT_HEIGHT: f32 = 28.0;
+const MINI_HEIGHT: f32 = 12.0;
+const MINI_Y: f32 = 9.0;
+const VIEWPORT_Y: f32 = 6.0;
+const VIEWPORT_HEIGHT: f32 = 18.0;
 
 const CARD_BG: Color = Color {
-    r: 24,
-    g: 26,
-    b: 33,
-    a: 0.90,
+    r: 18,
+    g: 20,
+    b: 26,
+    a: 0.82,
 };
 const CARD_EDGE: Color = Color {
     r: 255,
@@ -440,7 +440,8 @@ pub fn build_plan(
         return None;
     }
 
-    let target = (output_width * 3 / 5).clamp(MIN_CARD_WIDTH, MAX_CARD_WIDTH);
+    // Two fifths of the usable width, capped: a compact strip, not a panel.
+    let target = (output_width * 2 / 5).clamp(MIN_CARD_WIDTH, MAX_CARD_WIDTH);
     let available = output_width - 2 * SIDE_MARGIN;
     let width = target.min(available).max(80);
     let content = width as f32 - 2.0 * CARD_PADDING;
@@ -496,11 +497,11 @@ pub fn render(plan: &Plan, config: &Config) -> Vec<u32> {
         };
         if !window.focused {
             // Unfocused windows recede; the focused one is the anchor.
-            color.a *= 0.55;
+            color.a *= 0.32;
         }
         canvas.rounded_rect(
             Shape::new(window.x, MINI_Y, window.width, MINI_HEIGHT),
-            3.0,
+            MINI_HEIGHT * 0.5,
             color,
         );
     }
@@ -508,17 +509,17 @@ pub fn render(plan: &Plan, config: &Config) -> Vec<u32> {
     // The viewport sits *on top of* the window strip, not in a separate row:
     // it marks exactly which horizontal slice is on screen.
     let mut fill = config.border.focused_color;
-    fill.a = (fill.a * 0.18).min(0.25);
+    fill.a = (fill.a * 0.14).min(0.20);
     let viewport = Shape::new(
         plan.viewport_x,
         VIEWPORT_Y,
         plan.viewport_width,
         VIEWPORT_HEIGHT,
     );
-    canvas.rounded_rect(viewport, 8.0, fill);
+    canvas.rounded_rect(viewport, VIEWPORT_HEIGHT * 0.5, fill);
     let mut edge = config.border.focused_color;
-    edge.a = edge.a.min(0.9);
-    canvas.rounded_stroke(viewport, 8.0, 1.5, edge);
+    edge.a = edge.a.min(0.55);
+    canvas.rounded_stroke(viewport, VIEWPORT_HEIGHT * 0.5, 1.0, edge);
 
     canvas.pixels
 }
