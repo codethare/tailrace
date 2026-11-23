@@ -19,6 +19,10 @@ The vendored state matches river `main` commit
 | `river-xkb-bindings-v1.xml` | v3 | none |
 | `river-layer-shell-v1.xml` | v1 | none |
 
+`wlr-layer-shell-unstable-v1.xml` is vendored separately from wlroots
+(<https://gitlab.freedesktop.org/wlroots/wlroots>, MIT, © Drew DeVault) because
+tailrace draws the overflow card itself. Only v1 requests are used.
+
 Only the window management protocol changed: v6 adds interactive touch move and
 resize events/requests. The xkb bindings and layer shell protocols still match
 the v0.4.8 release byte-for-byte. Because v6 is newer than the v0.4.8 release,

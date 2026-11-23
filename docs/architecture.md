@@ -5,9 +5,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Architecture
 
-tailrace is a window manager *client*: river owns input, rendering and the
-protocol, and tailrace decides where windows go and which one has focus. This
-document is the map for changing it; `README.md` covers user-facing behaviour.
+tailrace is a window manager *client*: river owns input, window rendering and
+the protocol, and tailrace decides where windows go and which one has focus.
+The one surface tailrace draws itself is the overflow card
+(`indicator.rs`, layer-shell + `wl_shm`). This document is the map for changing
+it; `README.md` covers user-facing behaviour.
 
 ## Where things live
 
@@ -21,6 +23,7 @@ document is the map for changing it; `README.md` covers user-facing behaviour.
 | `layout/` | Geometry: `update` (targets), `apply`/`snap_to_finish` (commit), `focus.rs` (borders, focus, raise), `migrate.rs` (output hotplug) |
 | `keybinding/` | Default tables (`defaults.rs`), parsing/setup (`keybinding.rs`), action dispatch (`dispatch.rs`) |
 | `overview.rs` | Grid overlay |
+| `indicator.rs` | Overflow card: plan from committed `geom.current`, software ARGB8888 rendering, a `zwlr_layer_shell_v1` overlay surface and its hide deadline |
 | `hotplug/` | The test harness and all scenario tests (see below) |
 | `protocol/` | Vendored river protocol XMLs; provenance in `protocol/README.md` |
 

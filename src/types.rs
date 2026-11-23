@@ -438,6 +438,9 @@ pub struct Config {
     pub cursor: Option<Cursor>,
     /// Focus the window under the pointer (sloppy focus).
     pub focus_follows_pointer: bool,
+    /// Show the overflow card at the top of the focused output when focus
+    /// moves and the workspace has windows scrolled off-screen.
+    pub overflow_indicator: bool,
     pub spawn_at_startup: Vec<Vec<String>>,
     pub keybindings: Vec<Keybinding>,
     pub pointer_bindings: Vec<PointerBinding>,
@@ -492,6 +495,7 @@ impl Default for Config {
             border: Border::default(),
             cursor: None,
             focus_follows_pointer: false,
+            overflow_indicator: true,
             spawn_at_startup: Vec::new(),
             keybindings: Vec::new(),
             pointer_bindings: Vec::new(),

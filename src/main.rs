@@ -8,6 +8,7 @@ mod actions;
 mod app;
 mod config;
 mod ctl;
+mod indicator;
 mod keybinding;
 mod layout;
 mod output;
@@ -178,6 +179,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         warned_missing_seat: false,
         wl_seat_version: 0,
         cursor_shape_manager: None,
+        compositor: None,
+        shm: None,
+        wlr_layer_shell: None,
+        indicator: crate::indicator::Indicator::new(),
         wm: WindowManager::new(config),
         qh: qh.clone(),
     };
@@ -252,9 +257,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         ];
         let count = if ctl_fd.is_some() { 2 } else { 1 };
+        // The overflow card hides on a deadline, so wait at most that long.
+        let timeout = state.indicator.poll_timeout_ms();
         // SAFETY: `fds` has `count` initialised entries and poll only writes to
         // their `revents` fields.
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), count, -1) };
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), count, timeout) };
         if ready < 0 {
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
@@ -280,6 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             ctl::serve(listener, &mut state);
         }
+        state.indicator.tick();
     }
     Ok(())
 }

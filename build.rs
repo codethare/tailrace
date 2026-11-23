@@ -6,6 +6,7 @@ fn main() {
         "river-window-management-v1.xml",
         "river-xkb-bindings-v1.xml",
         "river-layer-shell-v1.xml",
+        "wlr-layer-shell-unstable-v1.xml",
     ] {
         println!("cargo:rerun-if-changed=protocol/{protocol}");
     }

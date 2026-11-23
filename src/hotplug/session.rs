@@ -29,6 +29,10 @@ impl Session {
             warned_missing_seat: false,
             wl_seat_version: 0,
             cursor_shape_manager: None,
+            compositor: None,
+            shm: None,
+            wlr_layer_shell: None,
+            indicator: crate::indicator::Indicator::new(),
             wm: WindowManager::new(config::default_config()),
             qh: qh.clone(),
         };

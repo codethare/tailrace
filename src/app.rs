@@ -4,9 +4,11 @@
 //! Dispatch root: protocol globals, binding lists, and the window-manager
 //! global event dispatch. The manage cycle itself is wired in main.rs.
 
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::{self, WlSeat};
+use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::{Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
@@ -20,6 +22,8 @@ use crate::river::river_window_manager_v1::{self, RiverWindowManagerV1};
 use crate::river::river_window_v1::RiverWindowV1;
 use crate::river::river_xkb_binding_v1::RiverXkbBindingV1;
 use crate::river::river_xkb_bindings_v1::RiverXkbBindingsV1;
+use crate::river::zwlr_layer_shell_v1::ZwlrLayerShellV1;
+use crate::river::zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1};
 use crate::types::{PendingWindow, Status};
 use crate::wm::{LayerShellFocus, WindowManager};
 
@@ -88,6 +92,12 @@ pub struct AppData {
     /// from the river seat's `wl_seat` event (which only carries the name).
     pub wl_seat_version: u32,
     pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
+    /// Globals the overflow card needs. All optional: without them the card is
+    /// simply not shown.
+    pub compositor: Option<WlCompositor>,
+    pub shm: Option<WlShm>,
+    pub wlr_layer_shell: Option<ZwlrLayerShellV1>,
+    pub indicator: crate::indicator::Indicator,
     pub wm: WindowManager,
     /// Queue handle, kept for creating child proxies (get_node, bindings...).
     pub qh: QueueHandle<AppData>,
@@ -180,6 +190,17 @@ impl Dispatch<WlRegistry, ()> for AppData {
             "wl_seat" => state.wl_seat_version = version,
             "wp_cursor_shape_manager_v1" => {
                 state.cursor_shape_manager = Some(registry.bind(name, 1, qh, ()));
+            }
+            // Optional: the overflow card. v4 gives damage_buffer in case it
+            // is ever wanted; only v1 requests are used today.
+            "wl_compositor" => {
+                state.compositor = Some(registry.bind(name, version.min(4), qh, ()));
+            }
+            "wl_shm" => {
+                state.shm = Some(registry.bind(name, 1, qh, ()));
+            }
+            "zwlr_layer_shell_v1" => {
+                state.wlr_layer_shell = Some(registry.bind(name, 1, qh, ()));
             }
             _ => {}
         }
@@ -279,6 +300,35 @@ wayland_client::delegate_noop!(AppData: ignore RiverLayerShellV1);
 wayland_client::delegate_noop!(AppData: ignore WlPointer);
 wayland_client::delegate_noop!(AppData: ignore WpCursorShapeManagerV1);
 wayland_client::delegate_noop!(AppData: ignore WpCursorShapeDeviceV1);
+// Overflow card plumbing. The shm buffer and surface are written directly and
+// no event of theirs is acted on; only the layer surface's configure/closed
+// matter.
+wayland_client::delegate_noop!(AppData: ignore WlCompositor);
+wayland_client::delegate_noop!(AppData: ignore WlShm);
+wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_shm_pool::WlShmPool);
+wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_buffer::WlBuffer);
+wayland_client::delegate_noop!(AppData: ignore wayland_client::protocol::wl_surface::WlSurface);
+wayland_client::delegate_noop!(AppData: ignore ZwlrLayerShellV1);
+
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for AppData {
+    fn event(
+        state: &mut Self,
+        proxy: &ZwlrLayerSurfaceV1,
+        event: <ZwlrLayerSurfaceV1 as Proxy>::Event,
+        _data: &(),
+        _conn: &wayland_client::Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
+                crate::indicator::on_configure(state, proxy, serial);
+            }
+            zwlr_layer_surface_v1::Event::Closed => {
+                crate::indicator::on_closed(state, proxy);
+            }
+        }
+    }
+}
 
 impl Dispatch<WlSeat, ()> for AppData {
     fn event(
@@ -395,4 +445,5 @@ pub fn manage(state: &mut AppData) {
             }
         }
     }
+    crate::indicator::sync(state);
 }

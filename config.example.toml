@@ -29,6 +29,11 @@ center_focused_window = "never"
 # Focus the window under the mouse pointer (sloppy focus)
 focus_follows_pointer = false
 
+# When focus moves and the focused workspace has windows scrolled off-screen,
+# briefly show a card at the top of the output: one small rectangle per window,
+# with the visible part of the workspace highlighted. Set to false to disable.
+overflow_indicator = true
+
 # Disable client side decorations
 no_csd = true
 
