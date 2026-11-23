@@ -76,6 +76,10 @@ struct FocusKey {
     output: usize,
     workspace: usize,
     window: Option<RiverWindowV1>,
+    /// Windows in the focused workspace. A change here is a window opening or
+    /// closing, not a focus move: the card must not pop up like a titlebar
+    /// merely because a fourth window was mapped. Equality ignores this field.
+    count: usize,
 }
 
 impl PartialEq for FocusKey {
@@ -83,6 +87,14 @@ impl PartialEq for FocusKey {
         self.output == other.output
             && self.workspace == other.workspace
             && self.window == other.window
+    }
+}
+
+impl FocusKey {
+    /// The focused workspace gained or lost a window, so the focus change came
+    /// from mapping/unmapping rather than from a focus action.
+    fn structurally_changed(&self, new: &FocusKey) -> bool {
+        self.output == new.output && self.workspace == new.workspace && self.count != new.count
     }
 }
 
@@ -165,15 +177,22 @@ pub fn sync(state: &mut AppData) {
     let plan = plan_for(&state.wm);
     let focus = focus_key(&state.wm);
     let changed = state.indicator.primed && state.indicator.focus != focus;
+    let structural = match (&state.indicator.focus, &focus) {
+        (Some(old), Some(new)) => old.structurally_changed(new),
+        _ => false,
+    };
     state.indicator.primed = true;
     state.indicator.focus = focus;
 
     match plan {
         Some(plan) => {
-            // Only a focus move (or a changed strip while the card is still
-            // up) brings the card back; the timeout must not be undone by an
-            // unrelated manage pass.
-            if changed {
+            // Only a focus move brings the card up. Mapping or unmapping a
+            // window changes the focus target too, but popping a bar above the
+            // new window is mistakable for its titlebar, so that case only
+            // clears an already visible card.
+            if structural {
+                state.indicator.destroy_surface();
+            } else if changed {
                 show(state, plan);
             } else if state
                 .indicator
@@ -202,7 +221,8 @@ fn focus_key(wm: &WindowManager) -> Option<FocusKey> {
     let output = wm.focused_output_idx?;
     let out = wm.outputs.get(output)?;
     let workspace = out.focused_workspace_idx;
-    let window = out.workspace_list.get(workspace).and_then(|workspace| {
+    let focused = out.workspace_list.get(workspace);
+    let window = focused.and_then(|workspace| {
         workspace
             .focused_window_idx
             .and_then(|idx| workspace.window_list.get(idx))
@@ -212,6 +232,7 @@ fn focus_key(wm: &WindowManager) -> Option<FocusKey> {
         output,
         workspace,
         window,
+        count: focused.map_or(0, |workspace| workspace.window_list.len()),
     })
 }
 
@@ -738,6 +759,28 @@ mod tests {
         // Rounded corners are fully transparent.
         assert_eq!(pixels[0] >> 24, 0);
         assert_eq!(pixels[pixels.len() - 1] >> 24, 0);
+    }
+
+    fn focus(output: usize, workspace: usize, count: usize) -> FocusKey {
+        FocusKey {
+            output,
+            workspace,
+            window: None,
+            count,
+        }
+    }
+
+    #[test]
+    fn mapping_a_window_is_not_a_focus_move() {
+        let before = focus(0, 0, 3);
+        // The fourth window mapped and took focus: no card.
+        assert!(before.structurally_changed(&focus(0, 0, 4)));
+        // A real focus move inside the same window list is a card.
+        assert!(!before.structurally_changed(&focus(0, 0, 3)));
+        // Switching workspace or output is a focus move even if the counts
+        // happen to differ.
+        assert!(!before.structurally_changed(&focus(0, 1, 4)));
+        assert!(!before.structurally_changed(&focus(1, 0, 4)));
     }
 
     #[test]
